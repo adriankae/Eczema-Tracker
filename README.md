@@ -120,7 +120,7 @@ Thin application layer for scheduled tasks and notifications.
 ## 4. Technology Stack
 
 * Database: PostgreSQL
-* Backend: API server (recommended: Python/FastAPI or Node.js)
+* Backend: API server (Python/FastAPI)
 * Interface:
 
   * CLI tool
