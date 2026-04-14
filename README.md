@@ -382,6 +382,7 @@ The system is designed for agents to:
 * Analytics (adherence, relapse probability)
 * Gamification
 * Picture of location
+* Link to food tracker for pattern and trigger recognition
 
 ---
 
