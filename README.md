@@ -101,6 +101,9 @@ Append-only log of all meaningful actions:
       AI Agent
           │
           ▼
+  Application Layer
+          │
+          ▼
     Headless CLI 
           │
           ▼
@@ -109,6 +112,8 @@ Append-only log of all meaningful actions:
           ▼
      PostgreSQL
 ```
+
+Thin application layer for scheduled tasks and notifications.
 
 ---
 
