@@ -37,6 +37,8 @@ active_flare
 → healed
 → taper phases (2–7)
 → obsolete
+
+(relapse can occur from healed or any taper phase → back to active_flare)
 ```
 
 ---
@@ -71,6 +73,13 @@ Each episode maintains:
 
 Logs of actual cream/medication usage.
 
+Each application:
+
+* belongs to an episode
+* has a timestamp (`applied_at`)
+* includes treatment type (e.g. steroid, emollient)
+* is used to evaluate adherence and derive next actions
+
 ---
 
 ### 2.6 Events
@@ -80,7 +89,7 @@ Append-only log of all meaningful actions:
 * episode creation
 * healing
 * phase transitions
-* relapse
+* relapse (explicit user-reported state change back to flare)
 * application logging
 * completion
 
@@ -108,6 +117,7 @@ Append-only log of all meaningful actions:
 * Database: PostgreSQL
 * Backend: API server (recommended: Python/FastAPI or Node.js)
 * Interface:
+
   * CLI tool
   * Agent (OpenClaw / Hermes)
 * Deployment: Docker
@@ -154,7 +164,7 @@ Tracks lifecycle and current state.
 
 Key fields:
 
-* `status`
+* `status` (includes `active_flare`, `in_taper`, `obsolete`)
 * `current_phase_number`
 * `phase_started_at`
 * `phase_due_end_at`
@@ -174,11 +184,26 @@ Versioned via `protocol_version`.
 
 Tracks all transitions between phases.
 
+Includes:
+
+* phase start
+* phase end
+* transition reason (`healed`, `auto_advance`, `relapse`)
+
 ---
 
 ### 5.6 Treatment Applications
 
 Logs real-world usage.
+
+Each record represents:
+
+* one application event
+* used for:
+
+  * adherence tracking
+  * next-dose calculation
+  * agent reasoning
 
 ---
 
@@ -190,14 +215,22 @@ Append-only event stream for:
 * explainability
 * agent reasoning
 
+Important event types:
+
+* `episode_created`
+* `healed_marked`
+* `phase_entered`
+* `relapse_marked`
+* `application_logged`
+* `episode_obsoleted`
+
 ---
 
 ## 6. State Machine
 
 ```
 created
-→ active_flare
-→ healed
+→ active_flare (phase 1)
 → phase 2
 → phase 3
 → ...
@@ -205,9 +238,46 @@ created
 → obsolete
 ```
 
+relapse:
+phase 2–7 → active_flare (phase 1 restart)
+
 ---
 
-## 7. Multi-User Model
+## 7. Relapse Handling
+
+Relapse is explicitly user-driven.
+
+### Trigger
+
+User reports:
+
+> symptoms returned
+
+### Effect
+
+* event: `relapse_marked`
+* episode state:
+
+  * `status → active_flare`
+  * `current_phase_number → 1`
+* new phase history entry is created
+
+### Design choice
+
+Relapse is modeled as:
+
+* event (source of truth)
+* plus state transition
+
+This ensures:
+
+* auditability
+* agent explainability
+* deterministic recovery logic
+
+---
+
+## 8. Multi-User Model
 
 ### Structure
 
@@ -226,11 +296,11 @@ Each episode belongs to:
 
 ---
 
-## 8. API Design (Conceptual)
+## 9. API Design (Conceptual)
 
 ### Endpoints
 
-#### Create episode
+#### Create location
 
 ```
 POST /locations
@@ -254,6 +324,12 @@ POST /episodes/{id}/heal
 POST /applications
 ```
 
+#### Report relapse
+
+```
+POST /episodes/{id}/relapse
+```
+
 #### Advance phase
 
 ```
@@ -268,13 +344,14 @@ GET /episodes/due
 
 ---
 
-## 9. CLI Design (Conceptual)
+## 10. CLI Design (Conceptual)
 
 Examples:
 
 ```bash
 eczema episode create --location left_elbow
 eczema episode heal 42
+eczema episode relapse 42
 eczema apply log 42 --type steroid
 eczema episode due
 eczema episode timeline 42
@@ -282,30 +359,33 @@ eczema episode timeline 42
 
 ---
 
-## 10. Agent Integration
+## 11. Agent Integration
 
 The system is designed for agents to:
 
-* prompt a user to log medication application
-* create a new episode
+* prompt users to log medication application
+* detect missing applications
+* create episodes
 * read event history
 * determine next required actions
-* detect anomalies (missed treatments)
+* detect relapse patterns
+* explain decisions based on event stream
 
 ---
 
-## 11. Future Extensions
+## 12. Future Extensions
 
 ### Planned
 
 * Treatment plan instances
-* Notification system
-* Mobile interface
+* Notification system (missed dose, phase change)
 * Analytics (adherence, relapse probability)
+* Gamification
+* Picture of location
 
 ---
 
-## 12. Design Principles
+## 13. Design Principles
 
 * deterministic protocol logic
 * explicit state tracking
@@ -315,7 +395,7 @@ The system is designed for agents to:
 
 ---
 
-## 13. Deployment
+## 14. Deployment
 
 Recommended:
 
@@ -330,7 +410,7 @@ Services:
 
 ---
 
-## 14. Why this architecture
+## 15. Why this architecture
 
 This system separates:
 
@@ -338,6 +418,11 @@ This system separates:
 * **rules** (protocol)
 * **history** (events)
 * **actions** (applications)
+
+Additionally:
+
+* relapse is modeled explicitly as an event + state transition
+* application logging is first-class and drives system behavior
 
 This ensures:
 
@@ -348,7 +433,7 @@ This ensures:
 
 ---
 
-## 15. Status
+## 16. Status
 
 Early-stage design, optimized for:
 
