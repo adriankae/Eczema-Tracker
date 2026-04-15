@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+pysqlite:///./eczema.db"
     app_env: str = "local"
     deployment_timezone: str = "UTC"
+    api_port: int = 28173
     jwt_secret: str = Field(default="dev-secret-change-me")
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24

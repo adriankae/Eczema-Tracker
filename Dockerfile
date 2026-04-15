@@ -22,6 +22,6 @@ COPY tests /app/tests
 RUN python -m pip install --upgrade pip \
     && python -m pip install -e ".[dev]"
 
-EXPOSE 8000
+EXPOSE 28173
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["sh", "-c", "alembic upgrade head && python -m app.server"]

@@ -19,6 +19,7 @@ services:
       DATABASE_URL: postgresql+psycopg://eczema:eczema@postgres:5432/eczema
       APP_ENV: local
       DEPLOYMENT_TIMEZONE: UTC
+      APP_PORT: 28173
       ENABLE_SCHEDULER: "true"
       JWT_SECRET: change-me-in-production
       INITIAL_USERNAME: admin
@@ -27,4 +28,4 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "28173:28173"

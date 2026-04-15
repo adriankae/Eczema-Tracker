@@ -88,19 +88,19 @@ The API container builds and uses its own Python virtual environment internally,
 
 After startup:
 
-- API: `http://localhost:8000`
+- API: `http://localhost:28173`
 - PostgreSQL: `localhost:5432`
 
 ### Health check
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:28173/health
 ```
 
 ### Login
 
 ```bash
-curl -s http://localhost:8000/auth/login \
+curl -s http://localhost:28173/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}'
 ```
@@ -185,7 +185,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/auth/login \
+curl -s http://localhost:28173/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}'
 ```
@@ -205,7 +205,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/auth/me \
+curl -s http://localhost:28173/auth/me \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -224,7 +224,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/api-keys \
+curl -s http://localhost:28173/api-keys \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"cli"}'
@@ -245,7 +245,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/api-keys \
+curl -s http://localhost:28173/api-keys \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -264,7 +264,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/api-keys/1/revoke \
+curl -s http://localhost:28173/api-keys/1/revoke \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -283,7 +283,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/subjects \
+curl -s http://localhost:28173/subjects \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"display_name":"Child"}'
@@ -304,7 +304,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/subjects \
+curl -s http://localhost:28173/subjects \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -323,7 +323,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/subjects/1 \
+curl -s http://localhost:28173/subjects/1 \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -343,7 +343,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/locations \
+curl -s http://localhost:28173/locations \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"code":"left_elbow","display_name":"Left elbow"}'
@@ -364,7 +364,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/locations \
+curl -s http://localhost:28173/locations \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -384,7 +384,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/episodes \
+curl -s http://localhost:28173/episodes \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"subject_id":1,"location_id":1,"protocol_version":"v1"}'
@@ -406,7 +406,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s "http://localhost:8000/episodes?subject_id=1&status=active_flare" \
+curl -s "http://localhost:28173/episodes?subject_id=1&status=active_flare" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -425,7 +425,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/episodes/1 \
+curl -s http://localhost:28173/episodes/1 \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -444,7 +444,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/episodes/1/heal \
+curl -s http://localhost:28173/episodes/1/heal \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"healed_at":"2026-04-05T18:00:00Z"}'
@@ -466,7 +466,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/episodes/1/relapse \
+curl -s http://localhost:28173/episodes/1/relapse \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"reported_at":"2026-04-06T18:00:00Z","reason":"symptoms_returned"}'
@@ -487,7 +487,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/episodes/1/advance \
+curl -s http://localhost:28173/episodes/1/advance \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{}'
@@ -512,7 +512,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/applications \
+curl -s http://localhost:28173/applications \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -544,7 +544,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s -X PATCH http://localhost:8000/applications/1 \
+curl -s -X PATCH http://localhost:28173/applications/1 \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"notes":"updated note"}'
@@ -565,7 +565,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s -X DELETE http://localhost:8000/applications/1 \
+curl -s -X DELETE http://localhost:28173/applications/1 \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -585,7 +585,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/applications/1/void \
+curl -s http://localhost:28173/applications/1/void \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"voided_at":"2026-04-06T08:00:00Z","reason":"logged_by_mistake"}'
@@ -606,7 +606,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s "http://localhost:8000/episodes/1/applications?include_voided=true" \
+curl -s "http://localhost:28173/episodes/1/applications?include_voided=true" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -625,7 +625,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s "http://localhost:8000/episodes/1/events?event_type=application_logged" \
+curl -s "http://localhost:28173/episodes/1/events?event_type=application_logged" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -644,7 +644,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s http://localhost:8000/episodes/1/timeline \
+curl -s http://localhost:28173/episodes/1/timeline \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -663,7 +663,7 @@ Optional fields:
 Example request:
 
 ```bash
-curl -s "http://localhost:8000/episodes/due?subject_id=1" \
+curl -s "http://localhost:28173/episodes/due?subject_id=1" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -697,7 +697,7 @@ source .venv/bin/activate
 ### Run locally
 
 ```bash
-.venv/bin/uvicorn app.main:app --reload
+.venv/bin/python -m app.server
 ```
 
 ### Migrations

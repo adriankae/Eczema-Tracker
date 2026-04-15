@@ -61,7 +61,7 @@ The first version follows these principles:
 Example:
 
 ```text
-http://localhost:8000
+http://localhost:28173
 ```
 
 All routes below are relative to the API root.
