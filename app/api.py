@@ -1,0 +1,284 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.dependencies import ActorContext, get_current_actor
+from app.core.database import get_db
+from app.core.time import utc_now
+from app.schemas import (
+    AccountOut,
+    AdvanceEpisodeRequest,
+    ApiKeyCreateRequest,
+    ApiKeyCreateResponse,
+    ApiKeyListResponse,
+    ApiKeyRevokeResponse,
+    ApplicationCreateRequest,
+    ApplicationListResponse,
+    ApplicationOut,
+    ApplicationResponse,
+    ApplicationUpdateRequest,
+    ApplicationVoidRequest,
+    DueListResponse,
+    EpisodeCreateRequest,
+    EpisodeListResponse,
+    EpisodeResponse,
+    EventListResponse,
+    HealEpisodeRequest,
+    LoginRequest,
+    LoginResponse,
+    LocationCreateRequest,
+    LocationCreateResponse,
+    LocationListResponse,
+    LocationOut,
+    RelapseEpisodeRequest,
+    SubjectCreateRequest,
+    SubjectListResponse,
+    SubjectOut,
+    TimelineResponse,
+)
+from app.services import (
+    advance_episode,
+    authenticate_user,
+    bootstrap_data,
+    create_api_key,
+    create_episode,
+    create_location,
+    create_subject,
+    delete_application,
+    due_items,
+    get_application,
+    get_episode,
+    get_location,
+    get_subject,
+    issue_login_token,
+    list_api_keys,
+    list_applications,
+    list_events,
+    list_episodes,
+    list_locations,
+    list_subjects,
+    log_application,
+    relapse_episode,
+    revoke_api_key,
+    heal_episode,
+    update_application,
+    void_application,
+)
+from app.models import Account
+
+router = APIRouter()
+
+
+def _episode_response(episode) -> EpisodeResponse:
+    return EpisodeResponse(episode=episode)
+
+
+def _application_response(application) -> ApplicationResponse:
+    return ApplicationResponse(application=application)
+
+
+def _location_response(location) -> LocationOut:
+    return LocationOut.model_validate(location)
+
+
+def _subject_response(subject) -> SubjectOut:
+    return SubjectOut.model_validate(subject)
+
+
+def _event_list(events) -> EventListResponse:
+    return EventListResponse(events=events)
+
+
+def install_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(HTTPException)
+    def handle_http_exception(_, exc: HTTPException):
+        code_map = {
+            401: "unauthorized",
+            403: "forbidden",
+            404: "not_found",
+            409: "conflict",
+            422: "invalid_request",
+        }
+        detail = exc.detail if isinstance(exc.detail, str) else "request failed"
+        return JSONResponse(status_code=exc.status_code, content={"error": {"code": code_map.get(exc.status_code, "invalid_request"), "message": detail}})
+
+    @app.exception_handler(IntegrityError)
+    def handle_integrity_error(_, exc: IntegrityError):
+        return JSONResponse(status_code=409, content={"error": {"code": "conflict", "message": "request violates a database constraint"}})
+
+    from fastapi.exceptions import RequestValidationError
+
+    @app.exception_handler(RequestValidationError)
+    def handle_validation_error(_, exc: RequestValidationError):
+        return JSONResponse(status_code=422, content={"error": {"code": "invalid_request", "message": "request validation failed"}})
+
+
+@router.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.get("/")
+def root() -> dict[str, str]:
+    return {"service": "eczema-tracker"}
+
+
+@router.post("/auth/login", response_model=LoginResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    account = authenticate_user(db, payload.username, payload.password)
+    return LoginResponse(access_token=issue_login_token(account), account=AccountOut.model_validate(account))
+
+
+@router.get("/auth/me", response_model=AccountOut)
+def me(actor: ActorContext = Depends(get_current_actor)):
+    return AccountOut.model_validate(actor.account)
+
+
+@router.post("/api-keys", response_model=ApiKeyCreateResponse)
+def api_keys_create(payload: ApiKeyCreateRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    api_key, plaintext = create_api_key(db, actor.account, payload.name)
+    return ApiKeyCreateResponse(api_key=api_key, plaintext_key=plaintext)
+
+
+@router.get("/api-keys", response_model=ApiKeyListResponse)
+def api_keys_list(actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return ApiKeyListResponse(api_keys=list_api_keys(db, actor.account))
+
+
+@router.post("/api-keys/{api_key_id}/revoke", response_model=ApiKeyRevokeResponse)
+def api_keys_revoke(api_key_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    api_key = revoke_api_key(db, actor.account, api_key_id)
+    return ApiKeyRevokeResponse(api_key=api_key)
+
+
+@router.post("/subjects", response_model=SubjectOut, status_code=status.HTTP_201_CREATED)
+def subjects_create(payload: SubjectCreateRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return _subject_response(create_subject(db, actor.account, payload.display_name))
+
+
+@router.get("/subjects", response_model=SubjectListResponse)
+def subjects_list(actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return SubjectListResponse(subjects=[_subject_response(subject) for subject in list_subjects(db, actor.account)])
+
+
+@router.get("/subjects/{subject_id}", response_model=SubjectOut)
+def subjects_get(subject_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return _subject_response(get_subject(db, actor.account, subject_id))
+
+
+@router.post("/locations", response_model=LocationCreateResponse, status_code=status.HTTP_201_CREATED)
+def locations_create(payload: LocationCreateRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return LocationCreateResponse(location=_location_response(create_location(db, actor.account, payload.code, payload.display_name)))
+
+
+@router.get("/locations", response_model=LocationListResponse)
+def locations_list(actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return LocationListResponse(locations=[_location_response(location) for location in list_locations(db, actor.account)])
+
+
+@router.post("/episodes", response_model=EpisodeResponse, status_code=status.HTTP_201_CREATED)
+def episodes_create(payload: EpisodeCreateRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    episode = create_episode(db, actor.account, payload.subject_id, payload.location_id, payload.protocol_version, utc_now(), actor.actor_type, actor.actor_id)
+    return _episode_response(episode)
+
+
+@router.get("/episodes", response_model=EpisodeListResponse)
+def episodes_list(subject_id: int | None = None, status: str | None = None, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return EpisodeListResponse(episodes=list_episodes(db, actor.account, subject_id=subject_id, status_name=status))
+
+
+@router.get("/episodes/due", response_model=DueListResponse)
+def episodes_due(subject_id: int | None = None, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return DueListResponse(due=due_items(db, actor.account, subject_id))
+
+
+@router.get("/episodes/{episode_id}", response_model=EpisodeResponse)
+def episodes_get(episode_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return _episode_response(get_episode(db, actor.account, episode_id))
+
+
+@router.post("/episodes/{episode_id}/heal", response_model=EpisodeResponse)
+def episodes_heal(episode_id: int, payload: HealEpisodeRequest | None = None, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    healed_at = (payload.healed_at if payload else None) or utc_now()
+    episode = heal_episode(db, actor.account, episode_id, healed_at, actor.actor_type, actor.actor_id)
+    return _episode_response(episode)
+
+
+@router.post("/episodes/{episode_id}/relapse", response_model=EpisodeResponse)
+def episodes_relapse(episode_id: int, payload: RelapseEpisodeRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    reported_at = payload.reported_at or utc_now()
+    episode = relapse_episode(db, actor.account, episode_id, reported_at, payload.reason, actor.actor_type, actor.actor_id)
+    return _episode_response(episode)
+
+
+@router.post("/episodes/{episode_id}/advance", response_model=EpisodeResponse)
+def episodes_advance(episode_id: int, payload: AdvanceEpisodeRequest | None = None, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    episode = advance_episode(db, actor.account, episode_id, utc_now(), actor.actor_type, actor.actor_id)
+    return _episode_response(episode)
+
+
+@router.post("/applications", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
+def applications_create(payload: ApplicationCreateRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    applied_at = payload.applied_at or utc_now()
+    application = log_application(
+        db,
+        actor.account,
+        payload.episode_id,
+        applied_at,
+        payload.treatment_type,
+        payload.treatment_name,
+        payload.quantity_text,
+        payload.notes,
+        actor.actor_type,
+        actor.actor_id,
+    )
+    return _application_response(application)
+
+
+@router.patch("/applications/{application_id}", response_model=ApplicationResponse)
+def applications_update(application_id: int, payload: ApplicationUpdateRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    application = update_application(
+        db,
+        actor.account,
+        application_id,
+        applied_at=payload.applied_at,
+        treatment_type=payload.treatment_type,
+        treatment_name=payload.treatment_name,
+        quantity_text=payload.quantity_text,
+        notes=payload.notes,
+        actor_type=actor.actor_type,
+        actor_id=actor.actor_id,
+    )
+    return _application_response(application)
+
+
+@router.delete("/applications/{application_id}", response_model=ApplicationResponse)
+def applications_delete(application_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    application = delete_application(db, actor.account, application_id, utc_now(), actor.actor_type, actor.actor_id)
+    return _application_response(application)
+
+
+@router.post("/applications/{application_id}/void", response_model=ApplicationResponse)
+def applications_void(application_id: int, payload: ApplicationVoidRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    application = void_application(db, actor.account, application_id, payload.voided_at or utc_now(), payload.reason, actor.actor_type, actor.actor_id)
+    return _application_response(application)
+
+
+@router.get("/episodes/{episode_id}/applications", response_model=ApplicationListResponse)
+def applications_list(episode_id: int, include_voided: bool = False, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return ApplicationListResponse(applications=[ApplicationOut.model_validate(app) for app in list_applications(db, actor.account, episode_id, include_voided)])
+
+
+@router.get("/episodes/{episode_id}/events", response_model=EventListResponse)
+def events_list(episode_id: int, event_type: str | None = None, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return _event_list(list_events(db, actor.account, episode_id, event_type=event_type))
+
+
+@router.get("/episodes/{episode_id}/timeline", response_model=TimelineResponse)
+def episode_timeline(episode_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    events = list_events(db, actor.account, episode_id)
+    return TimelineResponse(timeline=events)
+
