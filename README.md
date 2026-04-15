@@ -153,55 +153,9 @@ When an episode is marked healed:
 
 All endpoints require authentication unless noted otherwise.
 
-### Auth
-
-- `POST /auth/login`
-- `GET /auth/me`
-
-### API Keys
-
-- `POST /api-keys`
-- `GET /api-keys`
-- `POST /api-keys/{api_key_id}/revoke`
-
-### Subjects
-
-- `POST /subjects`
-- `GET /subjects`
-- `GET /subjects/{subject_id}`
-
-### Locations
-
-- `POST /locations`
-- `GET /locations`
-
-### Episodes
-
-- `POST /episodes`
-- `GET /episodes`
-- `GET /episodes/{episode_id}`
-- `POST /episodes/{episode_id}/heal`
-- `POST /episodes/{episode_id}/relapse`
-- `POST /episodes/{episode_id}/advance`
-
-### Applications
-
-- `POST /applications`
-- `PATCH /applications/{application_id}`
-- `DELETE /applications/{application_id}`
-- `POST /applications/{application_id}/void`
-- `GET /episodes/{episode_id}/applications`
-
-### Events and Timeline
-
-- `GET /episodes/{episode_id}/events`
-- `GET /episodes/{episode_id}/timeline`
-
-### Due View
-
-- `GET /episodes/due`
-
 ### Authentication headers
+
+Use one of these headers for authenticated requests.
 
 Bearer token:
 
@@ -213,6 +167,504 @@ API key:
 
 ```bash
 X-API-Key: <api_key>
+```
+
+### `POST /auth/login`
+
+Logs a user in with username and password and returns a bearer token.
+
+Mandatory fields:
+
+- `username`
+- `password`
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+```
+
+### `GET /auth/me`
+
+Returns the currently authenticated account.
+
+Mandatory fields:
+
+- none
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/auth/me \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /api-keys`
+
+Creates a new API key for the authenticated account and returns the plaintext key once.
+
+Mandatory fields:
+
+- `name`
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/api-keys \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"cli"}'
+```
+
+### `GET /api-keys`
+
+Lists API keys for the authenticated account.
+
+Mandatory fields:
+
+- none
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/api-keys \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /api-keys/{api_key_id}/revoke`
+
+Marks an API key inactive.
+
+Mandatory fields:
+
+- `api_key_id` path parameter
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/api-keys/1/revoke \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /subjects`
+
+Creates a subject for the authenticated account.
+
+Mandatory fields:
+
+- `display_name`
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/subjects \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"display_name":"Child"}'
+```
+
+### `GET /subjects`
+
+Lists the authenticated account’s subjects.
+
+Mandatory fields:
+
+- none
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/subjects \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /subjects/{subject_id}`
+
+Returns one subject by id.
+
+Mandatory fields:
+
+- `subject_id` path parameter
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/subjects/1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /locations`
+
+Creates a body location owned by the authenticated account.
+
+Mandatory fields:
+
+- `code`
+- `display_name`
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/locations \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"code":"left_elbow","display_name":"Left elbow"}'
+```
+
+### `GET /locations`
+
+Lists the authenticated account’s body locations.
+
+Mandatory fields:
+
+- none
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/locations \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /episodes`
+
+Creates a new eczema episode for a subject/location pair.
+
+Mandatory fields:
+
+- `subject_id`
+- `location_id`
+
+Optional fields:
+
+- `protocol_version` defaults to `v1`
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/episodes \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"subject_id":1,"location_id":1,"protocol_version":"v1"}'
+```
+
+### `GET /episodes`
+
+Lists episodes for the authenticated account.
+
+Mandatory fields:
+
+- none
+
+Optional fields:
+
+- `subject_id`
+- `status`
+
+Example request:
+
+```bash
+curl -s "http://localhost:8000/episodes?subject_id=1&status=active_flare" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /episodes/{episode_id}`
+
+Returns one episode by id.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/episodes/1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /episodes/{episode_id}/heal`
+
+Marks an episode as healed and moves it into phase 2 immediately.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+
+Optional fields:
+
+- `healed_at` defaults to now
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/episodes/1/heal \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"healed_at":"2026-04-05T18:00:00Z"}'
+```
+
+### `POST /episodes/{episode_id}/relapse`
+
+Resets a tapering episode back to phase 1.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+- `reason`
+
+Optional fields:
+
+- `reported_at` defaults to now
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/episodes/1/relapse \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"reported_at":"2026-04-06T18:00:00Z","reason":"symptoms_returned"}'
+```
+
+### `POST /episodes/{episode_id}/advance`
+
+Manually advances a tapering episode one step, or marks it obsolete after phase 7.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+
+Optional fields:
+
+- request body may be empty
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/episodes/1/advance \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+### `POST /applications`
+
+Logs a treatment application for an episode.
+
+Mandatory fields:
+
+- `episode_id`
+- `treatment_type`
+
+Optional fields:
+
+- `applied_at` defaults to now
+- `treatment_name`
+- `quantity_text`
+- `notes`
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/applications \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "episode_id":1,
+    "applied_at":"2026-04-06T07:30:00Z",
+    "treatment_type":"steroid",
+    "treatment_name":"Hydrocortisone 1%",
+    "quantity_text":"thin layer",
+    "notes":"morning dose"
+  }'
+```
+
+### `PATCH /applications/{application_id}`
+
+Edits an existing application.
+
+Mandatory fields:
+
+- `application_id` path parameter
+
+Optional fields:
+
+- `applied_at`
+- `treatment_type`
+- `treatment_name`
+- `quantity_text`
+- `notes`
+
+Example request:
+
+```bash
+curl -s -X PATCH http://localhost:8000/applications/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"notes":"updated note"}'
+```
+
+### `DELETE /applications/{application_id}`
+
+Soft-deletes an application.
+
+Mandatory fields:
+
+- `application_id` path parameter
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s -X DELETE http://localhost:8000/applications/1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /applications/{application_id}/void`
+
+Voids an application without deleting it.
+
+Mandatory fields:
+
+- `application_id` path parameter
+- `reason`
+
+Optional fields:
+
+- `voided_at` defaults to now
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/applications/1/void \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"voided_at":"2026-04-06T08:00:00Z","reason":"logged_by_mistake"}'
+```
+
+### `GET /episodes/{episode_id}/applications`
+
+Lists applications for one episode.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+
+Optional fields:
+
+- `include_voided` defaults to `false`
+
+Example request:
+
+```bash
+curl -s "http://localhost:8000/episodes/1/applications?include_voided=true" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /episodes/{episode_id}/events`
+
+Lists raw events for one episode.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+
+Optional fields:
+
+- `event_type`
+
+Example request:
+
+```bash
+curl -s "http://localhost:8000/episodes/1/events?event_type=application_logged" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /episodes/{episode_id}/timeline`
+
+Returns the chronological timeline for one episode.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+
+Optional fields:
+
+- none
+
+Example request:
+
+```bash
+curl -s http://localhost:8000/episodes/1/timeline \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /episodes/due`
+
+Returns the episodes that are due today.
+
+Mandatory fields:
+
+- none
+
+Optional fields:
+
+- `subject_id`
+
+Example request:
+
+```bash
+curl -s "http://localhost:8000/episodes/due?subject_id=1" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Data Model
