@@ -7,6 +7,7 @@ Self-hosted eczema episode tracking backend for one authenticated account, multi
 - [About](#about)
 - [Release 0.1](#release-01)
 - [Features](#features)
+- [Runtime Requirements](#runtime-requirements)
 - [Quick Start](#quick-start)
 - [Getting Started](#getting-started)
 - [API Documentation](#api-documentation)
@@ -75,6 +76,18 @@ Version `0.1.0` is the first release of the backend and includes:
 - Dockerfile for the API
 - Docker Compose with API + PostgreSQL
 - Alembic migration at container startup
+
+## Runtime Requirements
+
+This project targets Python 3.11.
+
+Required:
+
+- Python >=3.11,<4.0
+- Docker / Docker Compose for containerized deployment
+- PostgreSQL, if running outside Docker
+
+The Docker image uses `python:3.11-slim`.
 
 ## Quick Start
 

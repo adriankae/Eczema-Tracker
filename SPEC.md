@@ -126,7 +126,7 @@ The first version must support these workflows:
 
 Use this stack:
 
-* **Backend language:** Python 3.12+
+* **Backend language:** Python >=3.11,<4.0
 * **API framework:** FastAPI
 * **Database:** PostgreSQL
 * **ORM / DB access:** SQLAlchemy 2.x
