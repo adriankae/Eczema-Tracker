@@ -1,979 +1,570 @@
-# Eczema Treatment Tracker
+# Zema
 
-Self-hosted eczema episode tracking backend for one authenticated account, multiple subjects, account-owned body locations, and calendar-day-based taper progression.
+Zema is a self-hosted eczema treatment tracker with a FastAPI backend, PostgreSQL database, and a separate CLI/agent runtime.
 
-## Table Of Contents
+It tracks subjects, body locations, eczema episodes, taper protocol phases, treatment applications, due reminders, event timelines, and adherence.
 
-- [About](#about)
-- [Release 0.1](#release-01)
-- [Features](#features)
-- [Runtime Requirements](#runtime-requirements)
-- [Repository Layout](#repository-layout)
-- [Quick Start](#quick-start)
-- [Getting Started](#getting-started)
-- [Adherence Tracking](#adherence-tracking)
-- [API Documentation](#api-documentation)
-- [Data Model](#data-model)
-- [Development](#development)
-- [Testing](#testing)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
+## What Zema Is
 
-## About
+Zema is designed as two cooperating parts:
 
-This project provides a production-ready v1 backend for tracking eczema treatment episodes. It is built with:
+- `zema-be`: the backend API and system of record.
+- `zema-cli`: a separate runtime image containing the `zema` CLI.
 
-- FastAPI
-- PostgreSQL
-- SQLAlchemy 2.x
-- Alembic migrations
-- Pydantic models
-- an in-process scheduler
+The backend owns all domain logic. The CLI is a client/tooling layer that calls backend HTTP APIs, parses responses, renders terminal output, emits JSON, and returns stable exit codes.
 
-The system is designed to stay simple and self-hostable with a separate CLI and agent runtime.
+Use `zema` as the preferred CLI command. The older `czm` command remains available as a compatibility alias.
 
-## Release 0.1
+## Architecture
 
-Version `0.1.0` is the first release of the backend and includes:
+```text
+User / Agent / Telegram / Hermes / OpenClaw
+        |
+        v
+zema / czm CLI or zema-cli container
+        |
+        v
+zema-be FastAPI backend
+        |
+        v
+PostgreSQL
+```
 
-- authentication with username/password and JWT bearer tokens
-- API keys for programmatic access
-- account-scoped subjects and body locations
-- eczema episode lifecycle management
-- treatment application tracking
-- event logging and episode timelines
-- due calculations
-- adherence calendar, summary, missed-day, and rebuild workflows
-- automatic phase progression
-- Dockerized local deployment
-- automated tests
-
-## Features
-
-### Authentication
-
-- username/password login
-- JWT bearer tokens
-- API key support for service and CLI usage
-
-### Core domain
-
-- create and manage subjects
-- create and manage body locations
-- create episodes for a subject + location pair
-- mark healed, relapse, and advance phases
-- log, edit, void, and delete applications
-- list events and timeline history
-- view due episodes
-
-### Automation
-
-- background scheduler inside the API container
-- daily phase evaluation at deployment local `00:05`
-- automatic advancement from phases 2 through 7
-- automatic obsoletion after phase 7
-
-### Deployment
-
-- Dockerfile for the API/backend artifact, `zema-be`
-- Dockerfile for the CLI/agent runtime artifact, `zema-cli`
-- Docker Compose with backend, CLI runtime, and PostgreSQL
-- Alembic migration at container startup
-
-## Runtime Requirements
-
-This project targets Python 3.11.
-
-Required:
-
-- Python >=3.11,<4.0
-- Docker / Docker Compose for containerized deployment
-- PostgreSQL, if running outside Docker
-
-The Docker image uses `python:3.11-slim`.
+- `zema-be` is the FastAPI backend service.
+- `zema-cli` is the CLI/agent runtime service.
+- `postgres` is the canonical datastore.
+- Docker Compose keeps the backend and CLI/agent runtime in separate services.
+- The backend remains the source of truth for treatment, phase, due, and adherence logic.
+- The CLI calls the backend over HTTP.
+- Gateway code for Telegram, Hermes, OpenClaw, or similar tools should not run inside `zema-be`.
 
 ## Repository Layout
 
-This repository contains two separate Python packages and two separate deployable artifacts.
-
-- The backend package lives at the repository root and builds the `zema-be` API container.
-- The CLI package lives under `cli/` and builds the `zema-cli` runtime container.
-- `zema-be` is the API and source of truth for treatment, due, adherence, and phase logic.
-- `zema-cli` is a client, tooling, and agent runtime that talks to the backend over HTTP.
-- `zema-cli` does not own or duplicate backend business logic.
-
-The preferred CLI command is `zema`. The older `czm` command remains available as a compatibility alias.
-
-External Telegram, Hermes, or OpenClaw gateways should either install and call `zema`/`czm` directly, or run the `zema-cli` container as a subprocess-like tool. Gateway code should not run inside the `zema-be` backend container. Use `--json` for agent-safe output.
-
-## Quick Start
-
-### With Docker
-
-```bash
-docker compose up --build
+```text
+app/                 Backend API, domain services, models, scheduler
+alembic/             Database migrations
+tests/               Backend tests
+cli/                 Separate CLI package
+cli/docs/            CLI-specific docs
+cli/skills/          Agent Skills package
+docker/              Backend and CLI Dockerfiles
+docker-compose.yml   Local postgres, zema-be, and profiled zema-cli services
 ```
 
-The API container builds and uses its own Python virtual environment internally, so it does not rely on system `pip` during image build.
+The CLI package is still named `czm-cli` and its internal Python package is still under `cli/src/czm_cli`. The public command name is `zema`, with `czm` kept as a compatibility alias.
 
-After startup:
+## Features
 
-- API: `http://localhost:28173`
-- PostgreSQL: `localhost:5432`
+- Account-scoped authentication with username/password login, JWT access tokens, and hashed API keys.
+- Subject and body-location management.
+- Eczema episode lifecycle tracking.
+- Taper protocol phases with phase history.
+- Treatment application logging, editing, voiding, deleting, and listing.
+- Operational due reminders through `/episodes/due`.
+- Event history and timelines.
+- Daily adherence calculation and persisted audit snapshots.
+- In-process scheduler for phase progression.
+- Dockerized backend, PostgreSQL, and separate CLI/agent runtime.
 
-### Health check
+Runtime requirements:
 
-```bash
-curl http://localhost:28173/health
-```
+- Backend Python: `>=3.11,<4.0`
+- CLI Python: `>=3.11`; package metadata lists Python 3.11 and 3.12 support
+- Docker images: `python:3.11-slim`
+- PostgreSQL required when running outside Docker
 
-### Login
+## Docker Quickstart
 
-```bash
-curl -s http://localhost:28173/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin"}'
-```
-
-### CLI container
-
-The CLI runtime is available as the separate `zema-cli` service. It uses these environment variables:
-
-- `CZM_BASE_URL`
-- `CZM_API_KEY`
-- `CZM_TIMEZONE`
-
-In Docker Compose, `zema-cli` uses `CZM_BASE_URL=http://zema-be:28173`.
-
-Build all images:
+Build the images:
 
 ```bash
 docker compose build
 ```
 
-Start the backend:
+Start PostgreSQL and the backend:
 
 ```bash
 docker compose up -d postgres zema-be
 ```
 
-Run the CLI:
+Check the services:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 zema-be
+curl -sS http://localhost:28173/health
+```
+
+Expected health response:
+
+```json
+{"status":"ok"}
+```
+
+The backend is available at:
+
+```text
+http://localhost:28173
+```
+
+Run the CLI container:
 
 ```bash
 docker compose run --rm zema-cli zema --help
-docker compose run --rm zema-cli zema adherence summary --last 30 --json
-CZM_API_KEY=... docker compose run --rm zema-cli zema due list --json
-CZM_API_KEY=... docker compose run --rm zema-cli zema adherence summary --last 30 --json
 ```
 
-## Getting Started
-
-### 1. Clone the repository
+Authenticated CLI container examples:
 
 ```bash
-git clone git@eczema-tracker:adriankae/Eczema-Tracker.git
-cd Eczema-Tracker
+docker compose run --rm -e CZM_API_KEY="$CZM_API_KEY" zema-cli zema due list --json
+docker compose run --rm -e CZM_API_KEY="$CZM_API_KEY" zema-cli zema adherence summary --last 30 --json
 ```
 
-### 2. Start the stack
+Inside Docker Compose, `zema-cli` uses:
+
+```text
+CZM_BASE_URL=http://zema-be:28173
+```
+
+## Authentication And API Keys
+
+The local Docker Compose setup seeds a default account when the database is empty:
+
+```text
+username: admin
+password: admin
+```
+
+Override these with:
+
+```text
+INITIAL_USERNAME
+INITIAL_PASSWORD
+```
+
+Create an API key manually:
 
 ```bash
-docker compose up --build
+export CZM_BASE_URL="http://localhost:28173"
+
+export ACCESS_TOKEN="$(
+  curl -sS "$CZM_BASE_URL/auth/login" \
+    -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"admin"}' \
+  | jq -r '.access_token'
+)"
+
+export CZM_API_KEY="$(
+  curl -sS "$CZM_BASE_URL/api-keys" \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d '{"name":"zema-cli"}' \
+  | jq -r '.plaintext_key'
+)"
 ```
 
-### 3. Log in
-
-The first startup seeds a default account if the database is empty:
-
-- username: `admin`
-- password: `admin`
-
-Override these with environment variables:
-
-- `INITIAL_USERNAME`
-- `INITIAL_PASSWORD`
-
-### 4. Create your first data
-
-Use the authenticated API to create:
-
-1. a subject
-2. a body location
-3. an episode
-4. treatment applications
-
-### 5. Watch phase progression
-
-When an episode is marked healed:
-
-- it enters phase 2 immediately
-- the scheduler later advances it through phases 3 to 7
-- after phase 7 completes, the episode becomes obsolete
-
-## Adherence Tracking
-
-Adherence tracking is exposed through backend APIs and the `zema adherence` CLI commands. The backend remains the source of truth; the CLI only constructs HTTP requests, parses responses, renders terminal output, and returns exit codes.
-
-Persisted adherence snapshots use a fixed taper protocol schedule anchored to each phase start date. This is intentionally separate from `/episodes/due`, which remains the operational due/reminder endpoint.
-
-Important behavior:
-
-- GET adherence endpoints default to dynamic read-only calculation and do not persist rows.
-- Passing `persisted=true` returns stored audit rows from `episode_daily_adherence` only.
-- `POST /adherence/rebuild` persists or rebuilds adherence rows.
-- Extra applications count in `completed_applications`.
-- `credited_applications` is capped at `expected_applications`, so extra applications do not inflate the score.
-- The adherence score is `sum(credited_applications) / sum(expected_applications)`.
-- If there are no expected applications in the range, `adherence_score` is `null`.
-
-CLI examples:
+Verify the API key:
 
 ```bash
-zema adherence calendar --last 30
-zema adherence summary --last 30 --json
-zema adherence missed --from 2026-04-01 --to 2026-04-30
-zema adherence episode 1 --last 14
-zema adherence rebuild --episode 1 --from 2026-04-01 --to 2026-04-30
+curl -sS "$CZM_BASE_URL/auth/me" \
+  -H "X-API-Key: $CZM_API_KEY"
 ```
 
-The compatibility alias also works:
+The CLI can also create its config automatically with `zema setup`:
 
 ```bash
-czm adherence summary --last 30 --json
+zema setup \
+  --username admin \
+  --password admin \
+  --api-key-name zema-cli \
+  --timezone Europe/Berlin \
+  --base-url http://localhost:28173
 ```
 
-## API Documentation
+`zema setup` logs in, creates an API key, and writes a config file under `~/.config/czm/config.toml` or `$XDG_CONFIG_HOME/czm/config.toml`.
 
-All endpoints require authentication unless noted otherwise.
+## CLI
 
-### Authentication headers
-
-Use one of these headers for authenticated requests.
-
-Bearer token:
-
-```bash
-Authorization: Bearer <token>
-```
-
-API key:
-
-```bash
-X-API-Key: <api_key>
-```
-
-### `POST /auth/login`
-
-Logs a user in with username and password and returns a bearer token.
-
-Mandatory fields:
-
-- `username`
-- `password`
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"admin"}'
-```
-
-### `GET /auth/me`
-
-Returns the currently authenticated account.
-
-Mandatory fields:
-
-- none
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/auth/me \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /api-keys`
-
-Creates a new API key for the authenticated account and returns the plaintext key once.
-
-Mandatory fields:
-
-- `name`
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/api-keys \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"cli"}'
-```
-
-### `GET /api-keys`
-
-Lists API keys for the authenticated account.
-
-Mandatory fields:
-
-- none
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/api-keys \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /api-keys/{api_key_id}/revoke`
-
-Marks an API key inactive.
-
-Mandatory fields:
-
-- `api_key_id` path parameter
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/api-keys/1/revoke \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /subjects`
-
-Creates a subject for the authenticated account.
-
-Mandatory fields:
-
-- `display_name`
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/subjects \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"display_name":"Child"}'
-```
-
-### `GET /subjects`
-
-Lists the authenticated account’s subjects.
-
-Mandatory fields:
-
-- none
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/subjects \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /subjects/{subject_id}`
-
-Returns one subject by id.
-
-Mandatory fields:
-
-- `subject_id` path parameter
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/subjects/1 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /locations`
-
-Creates a body location owned by the authenticated account.
-
-Mandatory fields:
-
-- `code`
-- `display_name`
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/locations \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"code":"left_elbow","display_name":"Left elbow"}'
-```
-
-### `GET /locations`
-
-Lists the authenticated account’s body locations.
-
-Mandatory fields:
-
-- none
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/locations \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /episodes`
-
-Creates a new eczema episode for a subject/location pair.
-
-Mandatory fields:
-
-- `subject_id`
-- `location_id`
-
-Optional fields:
-
-- `protocol_version` defaults to `v1`
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/episodes \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"subject_id":1,"location_id":1,"protocol_version":"v1"}'
-```
-
-### `GET /episodes`
-
-Lists episodes for the authenticated account.
-
-Mandatory fields:
-
-- none
-
-Optional fields:
-
-- `subject_id`
-- `status`
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/episodes?subject_id=1&status=active_flare" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /episodes/{episode_id}`
-
-Returns one episode by id.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/episodes/1 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /episodes/{episode_id}/heal`
-
-Marks an episode as healed and moves it into phase 2 immediately.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-
-Optional fields:
-
-- `healed_at` defaults to now
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/episodes/1/heal \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"healed_at":"2026-04-05T18:00:00Z"}'
-```
-
-### `POST /episodes/{episode_id}/relapse`
-
-Resets a tapering episode back to phase 1.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-- `reason`
-
-Optional fields:
-
-- `reported_at` defaults to now
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/episodes/1/relapse \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"reported_at":"2026-04-06T18:00:00Z","reason":"symptoms_returned"}'
-```
-
-### `POST /episodes/{episode_id}/advance`
-
-Manually advances a tapering episode one step, or marks it obsolete after phase 7.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-
-Optional fields:
-
-- request body may be empty
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/episodes/1/advance \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{}'
-```
-
-### `POST /applications`
-
-Logs a treatment application for an episode.
-
-Mandatory fields:
-
-- `episode_id`
-
-Optional fields:
-
-- `applied_at` defaults to now
-- `treatment_type` defaults to `other`; allowed values are `steroid`, `emollient`, and `other`
-- `treatment_name`
-- `quantity_text`
-- `notes`
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/applications \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "episode_id":1,
-    "applied_at":"2026-04-06T07:30:00Z",
-    "treatment_type":"steroid",
-    "treatment_name":"Hydrocortisone 1%",
-    "quantity_text":"thin layer",
-    "notes":"morning dose"
-  }'
-```
-
-### `PATCH /applications/{application_id}`
-
-Edits an existing application.
-
-Mandatory fields:
-
-- `application_id` path parameter
-
-Optional fields:
-
-- `applied_at`
-- `treatment_type`
-- `treatment_name`
-- `quantity_text`
-- `notes`
-
-Example request:
-
-```bash
-curl -s -X PATCH http://localhost:28173/applications/1 \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"notes":"updated note"}'
-```
-
-### `DELETE /applications/{application_id}`
-
-Soft-deletes an application.
-
-Mandatory fields:
-
-- `application_id` path parameter
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s -X DELETE http://localhost:28173/applications/1 \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /applications/{application_id}/void`
-
-Voids an application without deleting it.
-
-Mandatory fields:
-
-- `application_id` path parameter
-- `reason`
-
-Optional fields:
-
-- `voided_at` defaults to now
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/applications/1/void \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"voided_at":"2026-04-06T08:00:00Z","reason":"logged_by_mistake"}'
-```
-
-### `GET /episodes/{episode_id}/applications`
-
-Lists applications for one episode.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-
-Optional fields:
-
-- `include_voided` defaults to `false`
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/episodes/1/applications?include_voided=true" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /episodes/{episode_id}/events`
-
-Lists raw events for one episode.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-
-Optional fields:
-
-- `event_type`
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/episodes/1/events?event_type=application_logged" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /episodes/{episode_id}/timeline`
-
-Returns the chronological timeline for one episode.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-
-Optional fields:
-
-- none
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/episodes/1/timeline \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /episodes/due`
-
-Returns the episodes that are due today.
-
-Mandatory fields:
-
-- none
-
-Optional fields:
-
-- `subject_id`
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/episodes/due?subject_id=1" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /adherence/calendar`
-
-Returns adherence days for a bounded date range. By default this calculates dynamically and does not persist rows.
-
-Mandatory fields:
-
-- `from` query parameter, `YYYY-MM-DD`
-- `to` query parameter, `YYYY-MM-DD`
-
-Optional fields:
-
-- `episode_id`
-- `subject_id`
-- `location_id`
-- `persisted` defaults to `false`; when `true`, returns stored audit rows only
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/adherence/calendar?from=2026-04-01&to=2026-04-30" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /adherence/summary`
-
-Returns adherence totals and score for the same filters as the calendar endpoint.
-
-Mandatory fields:
-
-- `from` query parameter
-- `to` query parameter
-
-Optional fields:
-
-- `episode_id`
-- `subject_id`
-- `location_id`
-- `persisted` defaults to `false`
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/adherence/summary?from=2026-04-01&to=2026-04-30" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /adherence/missed`
-
-Returns missed adherence days for a bounded date range.
-
-Mandatory fields:
-
-- `from` query parameter
-- `to` query parameter
-
-Optional fields:
-
-- `episode_id`
-- `subject_id`
-- `location_id`
-- `persisted` defaults to `false`
-- `include_partial` defaults to `false`
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/adherence/missed?from=2026-04-01&to=2026-04-30&include_partial=true" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `GET /episodes/{episode_id}/adherence`
-
-Returns episode-specific adherence days and summary.
-
-Mandatory fields:
-
-- `episode_id` path parameter
-- `from` query parameter
-- `to` query parameter
-
-Optional fields:
-
-- `persisted` defaults to `false`
-
-Example request:
-
-```bash
-curl -s "http://localhost:28173/episodes/1/adherence?from=2026-04-01&to=2026-04-30" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-### `POST /adherence/rebuild`
-
-Persists or rebuilds adherence snapshots. This is the explicit write operation for `episode_daily_adherence`.
-
-Mandatory fields:
-
-- `from`
-- `to`
-
-Optional fields:
-
-- `episode_id`; when omitted, active/current episodes are rebuilt
-- `active_only` defaults to `true`
-- `source` defaults to `rebuild`
-
-Example request:
-
-```bash
-curl -s http://localhost:28173/adherence/rebuild \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"episode_id":1,"from":"2026-04-01","to":"2026-04-30","source":"rebuild"}'
-```
-
-## Data Model
-
-The database includes:
-
-- `accounts`
-- `account_api_keys`
-- `subjects`
-- `body_locations`
-- `eczema_episodes`
-- `taper_protocol_phases`
-- `episode_phase_history`
-- `treatment_applications`
-- `episode_daily_adherence`
-- `episode_events`
-
-## Development
-
-### Python virtual environment
-
-Create and activate a local venv:
+Install the CLI from the repository root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e ".[dev]"
+python3 -m pip install -e cli
+zema --help
+czm --help
+zema adherence --help
 ```
 
-### Run locally
+If your pip index is unreachable, use PyPI explicitly:
 
 ```bash
-.venv/bin/python -m app.server
+PIP_INDEX_URL=https://pypi.org/simple python3 -m pip install -e cli
 ```
 
-### Migrations
+If `zema` is installed into a user bin directory that is not on `PATH`, activate the virtual environment or add the pip scripts directory shown by pip to your `PATH`.
+
+CLI configuration precedence is:
+
+```text
+CLI flags > CZM_* environment variables > config file
+```
+
+The CLI uses these environment variables:
+
+```text
+CZM_BASE_URL
+CZM_API_KEY
+CZM_TIMEZONE
+```
+
+The default base URL is:
+
+```text
+http://localhost:28173
+```
+
+See the detailed CLI docs in [`cli/docs/`](cli/docs/).
+
+## Common Workflows
+
+After the backend is running and the CLI has an API key:
 
 ```bash
-.venv/bin/alembic upgrade head
+zema subject create --display-name "Child A"
+zema location create --code left_elbow --display-name "Left elbow"
+zema episode create --subject "Child A" --location left_elbow
+zema application log --episode 1
+zema due list
+zema events list --episode 1
 ```
 
-### Tests
+Notes:
+
+- `zema application log --episode 1` records a minimal application.
+- If omitted, `treatment_type` defaults to `other`.
+- Optional application fields include `--applied-at`, `--treatment-type`, `--treatment-name`, `--quantity-text`, and `--notes`.
+- Subject and location references may be numeric IDs or resolvable names/codes.
+
+## Adherence Tracking
+
+Adherence is exposed through backend APIs and `zema adherence ...` commands.
+
+Dynamic adherence:
+
+- Is the default GET behavior.
+- Is read-only.
+- Is calculated live from phase history, taper protocol, and valid applications.
+- Does not write rows.
+
+Persisted adherence:
+
+- Is stored in `episode_daily_adherence`.
+- Is returned when `persisted=true` or `--persisted` is used.
+- Reads stored rows only.
+- May be empty before a rebuild has persisted snapshots.
+
+Rebuild:
+
+- `POST /adherence/rebuild` and `zema adherence rebuild` persist or update rows.
+- CLI rebuild requires `--from` and `--to`.
+- Rebuild without `episode_id` rebuilds active, non-obsolete episodes only.
+- Broad all-episode rebuild with `active_only=false` is intentionally rejected in v1.
+
+Schedule and scoring:
+
+- Adherence snapshots use a fixed phase-start schedule for auditability.
+- `/episodes/due` remains separate operational due/reminder logic.
+- `completed_applications` is the raw valid logged application count for a day.
+- `credited_applications = min(completed_applications, expected_applications)`.
+- Score is `sum(credited_applications) / sum(expected_applications)`.
+- If there are no expected applications, `adherence_score` is `null`.
+
+Examples:
 
 ```bash
-.venv/bin/python -m pytest tests
-.venv/bin/python -m pip install -e cli
-.venv/bin/python -m pytest cli/tests
+zema adherence summary --episode 1 --last 30 --json
+zema adherence calendar --episode 1 --last 30
+zema adherence missed --episode 1 --last 30 --include-partial
+zema adherence rebuild --episode 1 --from 2026-04-01 --to 2026-04-30 --json
+zema adherence summary --episode 1 --last 30 --persisted --json
 ```
+
+## Backend API
+
+Interactive FastAPI docs are available when the backend is running:
+
+```text
+http://localhost:28173/docs
+```
+
+Endpoint groups:
+
+```text
+GET /health
+
+POST /auth/login
+GET /auth/me
+
+POST /api-keys
+GET /api-keys
+POST /api-keys/{api_key_id}/revoke
+
+POST /subjects
+GET /subjects
+GET /subjects/{subject_id}
+
+POST /locations
+GET /locations
+
+POST /episodes
+GET /episodes
+GET /episodes/{episode_id}
+POST /episodes/{episode_id}/heal
+POST /episodes/{episode_id}/relapse
+POST /episodes/{episode_id}/advance
+GET /episodes/due
+
+POST /applications
+PATCH /applications/{application_id}
+DELETE /applications/{application_id}
+POST /applications/{application_id}/void
+GET /episodes/{episode_id}/applications
+
+GET /episodes/{episode_id}/events
+GET /episodes/{episode_id}/timeline
+
+GET /adherence/calendar
+GET /adherence/summary
+GET /adherence/missed
+GET /episodes/{episode_id}/adherence
+POST /adherence/rebuild
+```
+
+Authenticated API requests can use either:
+
+```text
+Authorization: Bearer <jwt-access-token>
+X-API-Key: <api-key>
+```
+
+## Local Development
+
+Install backend dependencies from the repository root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e ".[dev]"
+```
+
+Start dependencies with Docker:
+
+```bash
+docker compose up -d postgres
+```
+
+Run migrations:
+
+```bash
+python3 -m alembic upgrade head
+```
+
+Run the backend locally:
+
+```bash
+python3 -m app.server
+```
+
+For most local manual testing, the Docker Quickstart is simpler because it starts PostgreSQL and `zema-be` with the expected environment.
 
 ## Testing
 
-The test suite covers:
+Backend tests:
 
-- authentication
-- API key access
-- subjects and locations
-- episode lifecycle
-- scheduler behavior
-- application CRUD and due logic
-- adherence persistence, API endpoints, and CLI commands
-- event emission
-- account scoping
+```bash
+python3 -m pytest tests
+python3 -m pytest tests/test_adherence.py
+python3 -m pytest tests/test_adherence_api.py
+```
+
+CLI tests:
+
+```bash
+python3 -m pytest cli/tests
+python3 -m pytest cli/tests/test_adherence_cli.py
+```
+
+## Database Migrations
+
+Run migrations manually:
+
+```bash
+python3 -m alembic upgrade head
+```
+
+The `zema-be` Docker image runs this automatically on startup:
+
+```bash
+alembic upgrade head && python -m app.server
+```
+
+Current migrations include the initial schema and the `episode_daily_adherence` table.
+
+## Configuration
+
+Backend environment variables:
+
+```text
+DATABASE_URL
+APP_ENV
+DEPLOYMENT_TIMEZONE
+APP_PORT
+ENABLE_SCHEDULER
+JWT_SECRET
+INITIAL_USERNAME
+INITIAL_PASSWORD
+```
+
+Docker Compose defaults:
+
+```text
+DATABASE_URL=postgresql+psycopg://eczema:eczema@postgres:5432/eczema
+APP_ENV=local
+DEPLOYMENT_TIMEZONE=UTC
+APP_PORT=28173
+ENABLE_SCHEDULER=true
+JWT_SECRET=change-me-in-production
+INITIAL_USERNAME=admin
+INITIAL_PASSWORD=admin
+```
+
+CLI environment variables:
+
+```text
+CZM_BASE_URL
+CZM_API_KEY
+CZM_TIMEZONE
+```
+
+CLI config file locations:
+
+```text
+~/.config/czm/config.toml
+$XDG_CONFIG_HOME/czm/config.toml
+```
+
+Example CLI config:
+
+```toml
+base_url = "http://localhost:28173"
+api_key = "your-api-key"
+timezone = "Europe/Berlin"
+```
+
+## Agent / Telegram / Hermes / OpenClaw Integration
+
+Agent and gateway integrations should call `zema` or `czm` externally, or run the `zema-cli` container as a tool.
+
+Recommended agent pattern:
+
+```bash
+zema --json due list
+zema --json adherence summary --last 30
+zema --json application log --episode 1
+```
+
+Do not place Telegram, Hermes, OpenClaw, or other gateway code inside the `zema-be` backend image. Keep the backend focused on API, persistence, and domain logic.
+
+The repository includes an Agent Skills package under:
+
+```text
+cli/skills/czm/
+```
 
 ## Troubleshooting
 
-### Docker Compose prints a buildx warning
-
-This is a Docker tooling warning, not an application error. The stack can still build and run.
-
-### PostgreSQL shows a locale warning
-
-That is normal for the Alpine Postgres image and does not stop the database from starting.
-
-### API container exits during startup
-
-Check the logs:
+`python` not found:
 
 ```bash
-docker compose logs zema-be
-docker compose logs postgres
+python3 --version
 ```
 
-### Database reset
-
-If you want a fresh database:
+Pip index problems:
 
 ```bash
-docker compose down -v
+PIP_INDEX_URL=https://pypi.org/simple python3 -m pip install -e cli
 ```
 
-## Contributing
+`zema` not on `PATH`:
 
-The codebase is intentionally small and conventional. If you extend it later, keep the same principles:
+```bash
+source .venv/bin/activate
+.venv/bin/zema --help
+```
 
-- preserve account scoping
-- keep calendar-day semantics
-- keep the scheduler in-process
-- keep migrations explicit
+Port `28173` already in use:
 
-## License
+```bash
+lsof -i :28173
+```
 
-See the repository license, if present.
+Docker buildx warning:
+
+- Docker Compose may warn that buildx is not installed.
+- If the image still builds, you can continue.
+- If builds fail, update Docker Desktop or install the buildx plugin.
+
+Backend not ready:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 zema-be
+curl -sS http://localhost:28173/health
+```
+
+Missing or invalid `CZM_API_KEY`:
+
+- Run `zema setup`, or recreate an API key through `/auth/login` and `/api-keys`.
+- Remember that the CLI uses `X-API-Key`, not the JWT bearer token.
+
+Persisted adherence is empty:
+
+- This is expected before `zema adherence rebuild`.
+- Dynamic adherence remains available without persisted rows.
+
+No adherence rows:
+
+- Requested dates must be covered by episode phase history.
+- A newly created episode usually has phase history starting on its creation date.
+
+Wrong checkout:
+
+```bash
+test -d cli && test -f app/adherence.py && test -f docker/api.Dockerfile && test -f docker/cli.Dockerfile && echo "integrated checkout"
+```
+
+## Security Notes
+
+- Change the default `admin/admin` credentials.
+- Change `JWT_SECRET`.
+- Do not commit API keys.
+- Do not bake secrets into Docker images.
+- Use environment variables or secret management for deployments.
+- Do not expose `zema-be` publicly without TLS, authentication, and reverse-proxy hardening.
+
+## Versioning / Changelog
+
+The backend package version is tracked in `pyproject.toml`.
+
+The CLI package is separate under `cli/pyproject.toml`.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
+
+## Roadmap / Non-Goals
+
+- Telegram, Hermes, and OpenClaw gateway code is not included inside `zema-be`.
+- The CLI does not own or duplicate business logic.
+- The internal Python package rename from `czm_cli` to `zema` has not been done.
+- `/episodes/due` is operational reminder logic, not historical adherence auditing.
+- The project intentionally avoids GraphQL, Celery, Kafka, external workers, CQRS, and event sourcing.
