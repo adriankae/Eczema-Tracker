@@ -15,6 +15,7 @@ from czm_cli.telegram.keyboards import (
     adherence_keyboard,
     confirm_episode_action_keyboard,
     due_keyboard,
+    due_prompt_keyboard,
     episode_select_keyboard,
     location_actions_keyboard,
     location_image_prompt_keyboard,
@@ -49,6 +50,9 @@ async def handle_callback(update, context, handler_ctx: TelegramHandlerContext) 
     await _maybe_await(query.answer())
     try:
         ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
+        if (query.data or "") in {"menu:due", "menu:log_treatment"}:
+            await _send_due_prompts(update, context, handler_ctx)
+            return
         if (query.data or "").startswith(("heal:select:", "relapse:select:")):
             ensure_writes_allowed(handler_ctx.command_context.config.telegram)
             await _send_episode_action_confirmation(update, context, handler_ctx, query.data or "")
@@ -80,7 +84,9 @@ def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -
     if data.startswith("due:log:"):
         ensure_writes_allowed(config.telegram)
         episode_id = int(data.rsplit(":", 1)[1])
-        return formatting.format_application_logged(client.post("/applications", json={"episode_id": episode_id})), None
+        label = _due_label_for_episode(handler_ctx, episode_id)
+        client.post("/applications", json={"episode_id": episode_id})
+        return f"Logged application for {label}.", main_menu_keyboard()
     if data == "menu:subjects":
         return formatting.format_subjects(client.get("/subjects")), subjects_keyboard(allow_writes=config.telegram.allow_writes)
     if data == "subject:create":
@@ -280,6 +286,82 @@ def _handle_episode_action_callback(data: str, handler_ctx: TelegramHandlerConte
         payload = handler_ctx.command_context.client.post(f"/episodes/{episode_id}/relapse", json={"reason": "relapse"})
         return formatting.format_episode_action_success("Relapsed", payload), None
     return "Unknown or stale button. Tap /menu to start again.", None
+
+
+async def _send_due_prompts(update, context, handler_ctx: TelegramHandlerContext) -> None:
+    del context
+    query = update.callback_query
+    due_items = _enriched_due_items(handler_ctx)
+    if not due_items:
+        await safe_edit_callback_message(query, "No treatments are due right now.", reply_markup=main_menu_keyboard())
+        return
+    limit = formatting.MAX_ROWS
+    shown = due_items[:limit]
+    await safe_edit_callback_message(query, "Due prompts below.", reply_markup=main_menu_keyboard())
+    for item in shown:
+        text = _format_due_prompt(item)
+        keyboard = due_prompt_keyboard(int(item["episode_id"]), allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
+        image = _safe_location_image(handler_ctx, item.get("location_id"))
+        if image is not None and hasattr(query.message, "reply_photo"):
+            await query.message.reply_photo(photo=image[0], caption=text, reply_markup=keyboard)
+        else:
+            await query.message.reply_text(text, reply_markup=keyboard)
+    if len(due_items) > limit:
+        await query.message.reply_text(f"Showing {limit} of {len(due_items)} due items.", reply_markup=main_menu_keyboard())
+
+
+def _format_due_prompt(item: dict) -> str:
+    lines = [
+        item.get("telegram_label") or f"Episode {item.get('episode_id')}",
+        f"Subject: {item.get('telegram_subject_name') or item.get('subject_id')}",
+        f"Phase: {item.get('current_phase_number')}",
+    ]
+    status = item.get("status")
+    if status:
+        lines.append(f"Status: {status}")
+    return "\n".join(lines)
+
+
+def _due_label_for_episode(handler_ctx: TelegramHandlerContext, episode_id: int) -> str:
+    try:
+        for item in _enriched_due_items(handler_ctx):
+            if int(item.get("episode_id")) == episode_id:
+                return item.get("telegram_label") or f"episode {episode_id}"
+    except Exception:
+        pass
+    return f"episode {episode_id}"
+
+
+def _enriched_due_items(handler_ctx: TelegramHandlerContext) -> list[dict]:
+    due_items = handler_ctx.command_context.client.get("/episodes/due").get("due", [])
+    subjects = handler_ctx.command_context.client.get("/subjects").get("subjects", [])
+    locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
+    subject_names = {item.get("id"): item.get("display_name") for item in subjects}
+    location_names = {item.get("id"): item.get("display_name") for item in locations}
+    location_counts: dict[int, int] = {}
+    for item in due_items:
+        location_id = item.get("location_id")
+        location_counts[location_id] = location_counts.get(location_id, 0) + 1
+
+    base_labels: list[str] = []
+    for item in due_items:
+        location_name = location_names.get(item.get("location_id")) or f"Location {item.get('location_id')}"
+        subject_name = subject_names.get(item.get("subject_id")) or f"Subject {item.get('subject_id')}"
+        base_labels.append(f"{location_name} — {subject_name}" if location_counts.get(item.get("location_id"), 0) > 1 else location_name)
+    base_counts = {label: base_labels.count(label) for label in set(base_labels)}
+
+    enriched = []
+    for item, base_label in zip(due_items, base_labels, strict=False):
+        copied = dict(item)
+        if base_counts.get(base_label, 0) > 1:
+            label = f"{base_label} · phase {item.get('current_phase_number')} · #{item.get('episode_id')}"
+        else:
+            label = base_label
+        copied["telegram_label"] = label
+        copied["telegram_location_name"] = location_names.get(item.get("location_id")) or f"Location {item.get('location_id')}"
+        copied["telegram_subject_name"] = subject_names.get(item.get("subject_id")) or f"Subject {item.get('subject_id')}"
+        enriched.append(copied)
+    return enriched
 
 
 async def handle_guided_text(update, context, handler_ctx: TelegramHandlerContext) -> bool:

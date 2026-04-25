@@ -40,6 +40,14 @@ def due_keyboard(due_items: list[dict], *, allow_writes: bool) -> InlineKeyboard
     return InlineKeyboardMarkup(rows) if rows else None
 
 
+def due_prompt_keyboard(episode_id: int, *, allow_writes: bool) -> InlineKeyboardMarkup:
+    rows = []
+    if allow_writes:
+        rows.append([InlineKeyboardButton("Log application", callback_data=f"due:log:{episode_id}")])
+    rows.append([InlineKeyboardButton("Open menu", callback_data="menu:open")])
+    return InlineKeyboardMarkup(rows)
+
+
 def subjects_keyboard(*, allow_writes: bool) -> InlineKeyboardMarkup | None:
     if not allow_writes:
         return None

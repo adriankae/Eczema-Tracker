@@ -10,12 +10,16 @@ from czm_cli.telegram.state import ConversationStore
 
 
 class FakeClient:
-    def __init__(self, *, allow_empty=False):
+    def __init__(self, *, allow_empty=False, image: bytes | None = b"image-bytes"):
         self.requests = []
+        self.allow_empty = allow_empty
+        self.image = image
 
     def get(self, path, params=None):
         self.requests.append(("GET", path, params))
         if path == "/episodes/due":
+            if self.allow_empty:
+                return {"due": []}
             return {"due": [{"episode_id": 12, "subject_id": 1, "location_id": 2, "current_phase_number": 1, "treatment_due_today": True}]}
         if path == "/subjects":
             return {"subjects": [{"id": 1, "display_name": "Child A"}]}
@@ -35,6 +39,12 @@ class FakeClient:
             return {"location": {"id": 4, "code": json["code"], "display_name": json["display_name"]}}
         raise AssertionError(path)
 
+    def download_file(self, path):
+        self.requests.append(("DOWNLOAD", path, None))
+        if self.image is None:
+            raise RuntimeError("not found")
+        return self.image, "image/jpeg"
+
 
 class FakeMessage:
     def __init__(self, text=""):
@@ -43,6 +53,9 @@ class FakeMessage:
 
     async def reply_text(self, text, **kwargs):
         self.replies.append((text, kwargs.get("reply_markup")))
+
+    async def reply_photo(self, **kwargs):
+        self.replies.append((kwargs.get("caption"), kwargs.get("reply_markup"), kwargs.get("photo")))
 
 
 class FakeQuery:
@@ -67,9 +80,9 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_handler(*, allow_writes=True, chat_id=123, user_id=1):
+def make_handler(*, allow_writes=True, chat_id=123, user_id=1, allow_empty=False, image=b"image-bytes"):
     config = AppConfig(timezone="UTC", telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123], allow_writes=allow_writes))
-    client = FakeClient()
+    client = FakeClient(allow_empty=allow_empty, image=image)
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
     update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
     return ctx, client, update
@@ -90,8 +103,14 @@ def test_due_callback_includes_log_buttons_when_writes_enabled():
     query = FakeQuery("menu:due")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
-    assert "Due today" in query.edits[0][0]
-    assert query.edits[0][1] is not None
+    assert query.edits[0][0] == "Due prompts below."
+    assert "Left elbow" in query.message.replies[0][0]
+    assert "Subject: Child A" in query.message.replies[0][0]
+    assert "Phase: 1" in query.message.replies[0][0]
+    assert query.message.replies[0][2] == b"image-bytes"
+    labels = [button.text for row in query.message.replies[0][1].inline_keyboard for button in row]
+    assert labels == ["Log application", "Open menu"]
+    assert ("DOWNLOAD", "/locations/2/image", None) in client.requests
 
 
 def test_due_callback_hides_log_buttons_when_writes_disabled():
@@ -99,8 +118,36 @@ def test_due_callback_hides_log_buttons_when_writes_disabled():
     query = FakeQuery("menu:due")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
-    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    labels = [button.text for row in query.message.replies[0][1].inline_keyboard for button in row]
     assert labels == ["Open menu"]
+
+
+def test_due_callback_falls_back_to_text_when_image_missing():
+    ctx, client, update = make_handler(allow_writes=True, image=None)
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Left elbow" in query.message.replies[0][0]
+    assert len(query.message.replies[0]) == 2
+
+
+def test_log_treatment_uses_location_first_due_prompts():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("menu:log_treatment")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert query.edits[0][0] == "Due prompts below."
+    assert "Left elbow" in query.message.replies[0][0]
+    assert "Episode 12" not in query.message.replies[0][0]
+
+
+def test_due_callback_empty_state():
+    ctx, client, update = make_handler(allow_empty=True)
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert query.edits[0][0] == "No treatments are due right now."
+    assert query.message.replies == []
 
 
 def test_quick_log_button_posts_application():
@@ -109,6 +156,16 @@ def test_quick_log_button_posts_application():
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert ("POST", "/applications", {"episode_id": 12}) in client.requests
+    assert "Logged application for Left elbow" in query.edits[0][0]
+
+
+def test_quick_log_button_falls_back_when_due_item_cannot_be_resolved():
+    ctx, client, update = make_handler(allow_empty=True)
+    query = FakeQuery("due:log:12")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert ("POST", "/applications", {"episode_id": 12}) in client.requests
+    assert "Logged application for episode 12" in query.edits[0][0]
 
 
 def test_write_callback_rejected_when_disabled():
