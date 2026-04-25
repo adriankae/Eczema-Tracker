@@ -624,18 +624,25 @@ def list_events(db: Session, account: Account, episode_id: int, event_type: str 
 
 def _phase_one_slot_due_item(episode: EczemaEpisode, phase: TaperProtocolPhase, applications: list[TreatmentApplication], now: datetime) -> dict | None:
     local_now = to_local(now)
+    local_phase_start = to_local(episode.phase_started_at)
     today = local_now.date()
     cutoff_local = datetime.combine(today, time(14, 0), tzinfo=deployment_tz())
     day_start = local_midnight(today)
     cutoff = cutoff_local.astimezone(timezone.utc)
+    tomorrow_start = local_midnight(today + timedelta(days=1))
+    morning_exists = local_phase_start < cutoff_local
+    evening_exists = local_phase_start.date() <= today and local_phase_start < to_local(tomorrow_start)
+    applications_expected_today = int(morning_exists) + int(evening_exists)
 
     phase_one_today = [
         application
         for application in applications
-        if (application.phase_number_snapshot in {None, 1}) and to_local(application.applied_at).date() == today
+        if (application.phase_number_snapshot in {None, 1})
+        and to_local(application.applied_at) >= local_phase_start
+        and to_local(application.applied_at).date() == today
     ]
-    morning_satisfied = any(to_local(application.applied_at) < cutoff_local for application in phase_one_today)
-    evening_satisfied = any(to_local(application.applied_at) >= cutoff_local for application in phase_one_today)
+    morning_satisfied = morning_exists and any(to_local(application.applied_at) < cutoff_local for application in phase_one_today)
+    evening_satisfied = evening_exists and any(to_local(application.applied_at) >= cutoff_local for application in phase_one_today)
     last_application_at = applications[-1].applied_at if applications else None
     base = {
         "episode_id": episode.id,
@@ -645,15 +652,15 @@ def _phase_one_slot_due_item(episode: EczemaEpisode, phase: TaperProtocolPhase, 
         "treatment_due_today": True,
         "last_application_at": last_application_at,
         "applications_completed_today": len(phase_one_today),
-        "applications_expected_today": phase.applications_per_day,
+        "applications_expected_today": applications_expected_today,
     }
     if local_now < cutoff_local:
-        if morning_satisfied:
+        if not morning_exists or morning_satisfied:
             return None
         return {**base, "next_due_at": day_start, "due_slot": "morning", "missed_slots_today": []}
-    if evening_satisfied:
+    if not evening_exists or evening_satisfied:
         return None
-    missed_slots = [] if morning_satisfied else ["morning"]
+    missed_slots = [] if not morning_exists or morning_satisfied else ["morning"]
     return {**base, "next_due_at": cutoff, "due_slot": "evening", "missed_slots_today": missed_slots}
 
 

@@ -19,6 +19,13 @@ def _create_episode(client, headers, *, location_code="left_elbow", location_nam
     ).json()["episode"]
 
 
+def _create_taper_episode(client, headers, *, location_code: str, healed_at: str = "2026-04-05T08:00:00Z"):
+    episode = _create_episode(client, headers, location_code=location_code, location_name=location_code.replace("_", " ").title())
+    heal = client.post(f"/episodes/{episode['id']}/heal", headers=headers, json={"healed_at": healed_at})
+    assert heal.status_code == 200
+    return heal.json()["episode"]
+
+
 def test_episode_lifecycle(client, auth_headers):
     subject_id, location_id = _create_subject_location(client, auth_headers)
     created = client.post("/episodes", headers=auth_headers, json={"subject_id": subject_id, "location_id": location_id})
@@ -75,8 +82,11 @@ def test_auto_advance_and_obsolete(client, auth_headers):
 
 
 def test_phase_one_due_uses_morning_and_evening_slots(client, auth_headers, monkeypatch):
+    import app.api as api
     import app.services as services
 
+    monkeypatch.setattr(api, "utc_now", lambda: datetime(2026, 4, 6, 8, tzinfo=timezone.utc))
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 8, tzinfo=timezone.utc))
     episode = _create_episode(client, auth_headers, location_code="slot_elbow", location_name="Slot elbow")
     episode_id = episode["id"]
 
@@ -126,8 +136,11 @@ def test_phase_one_due_uses_morning_and_evening_slots(client, auth_headers, monk
 
 
 def test_phase_one_after_cutoff_marks_missed_morning_without_requiring_catchup(client, auth_headers, monkeypatch):
+    import app.api as api
     import app.services as services
 
+    monkeypatch.setattr(api, "utc_now", lambda: datetime(2026, 4, 6, 8, tzinfo=timezone.utc))
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 8, tzinfo=timezone.utc))
     episode = _create_episode(client, auth_headers, location_code="missed_morning", location_name="Missed morning")
     episode_id = episode["id"]
 
@@ -167,3 +180,147 @@ def test_taper_due_returns_only_currently_due_items(client, auth_headers, monkey
     assert due[0]["current_phase_number"] == 2
     assert due[0]["due_slot"] is None
     assert due[0]["missed_slots_today"] == []
+
+
+def test_relapse_before_cutoff_is_immediately_due_for_morning_slot(client, auth_headers, monkeypatch):
+    import app.services as services
+
+    episode = _create_taper_episode(client, auth_headers, location_code="relapse_morning")
+    episode_id = episode["id"]
+    relapse = client.post(
+        f"/episodes/{episode_id}/relapse",
+        headers=auth_headers,
+        json={"reported_at": "2026-04-06T10:00:00Z", "reason": "symptoms_returned"},
+    )
+    assert relapse.status_code == 200
+    assert relapse.json()["episode"]["phase_started_at"].startswith("2026-04-06T10:00:00")
+
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 10, 5, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    assert len(due) == 1
+    assert due[0]["episode_id"] == episode_id
+    assert due[0]["due_slot"] == "morning"
+    assert due[0]["applications_expected_today"] == 2
+
+
+def test_relapse_before_cutoff_morning_then_evening_due(client, auth_headers, monkeypatch):
+    import app.services as services
+
+    episode = _create_taper_episode(client, auth_headers, location_code="relapse_morning_evening")
+    episode_id = episode["id"]
+    client.post(
+        f"/episodes/{episode_id}/relapse",
+        headers=auth_headers,
+        json={"reported_at": "2026-04-06T10:00:00Z", "reason": "symptoms_returned"},
+    )
+    logged_morning = client.post(
+        "/applications",
+        headers=auth_headers,
+        json={"episode_id": episode_id, "applied_at": "2026-04-06T10:30:00Z"},
+    )
+    assert logged_morning.status_code == 201
+
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 11, tzinfo=timezone.utc))
+    assert client.get("/episodes/due", headers=auth_headers).json()["due"] == []
+
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 15, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    assert len(due) == 1
+    assert due[0]["episode_id"] == episode_id
+    assert due[0]["due_slot"] == "evening"
+    assert due[0]["missed_slots_today"] == []
+    assert due[0]["applications_completed_today"] == 1
+    assert due[0]["applications_expected_today"] == 2
+
+
+def test_relapse_after_cutoff_is_immediately_due_for_evening_only(client, auth_headers, monkeypatch):
+    import app.services as services
+
+    episode = _create_taper_episode(client, auth_headers, location_code="relapse_evening")
+    episode_id = episode["id"]
+    relapse = client.post(
+        f"/episodes/{episode_id}/relapse",
+        headers=auth_headers,
+        json={"reported_at": "2026-04-06T19:00:00Z", "reason": "symptoms_returned"},
+    )
+    assert relapse.status_code == 200
+    assert relapse.json()["episode"]["phase_started_at"].startswith("2026-04-06T19:00:00")
+
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 19, 5, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    assert len(due) == 1
+    assert due[0]["episode_id"] == episode_id
+    assert due[0]["due_slot"] == "evening"
+    assert due[0]["applications_expected_today"] == 1
+    assert due[0]["missed_slots_today"] == []
+
+
+def test_relapse_after_cutoff_evening_application_satisfies_day(client, auth_headers, monkeypatch):
+    import app.services as services
+
+    episode = _create_taper_episode(client, auth_headers, location_code="relapse_evening_done")
+    episode_id = episode["id"]
+    client.post(
+        f"/episodes/{episode_id}/relapse",
+        headers=auth_headers,
+        json={"reported_at": "2026-04-06T19:00:00Z", "reason": "symptoms_returned"},
+    )
+    logged_evening = client.post(
+        "/applications",
+        headers=auth_headers,
+        json={"episode_id": episode_id, "applied_at": "2026-04-06T19:15:00Z"},
+    )
+    assert logged_evening.status_code == 201
+
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 20, tzinfo=timezone.utc))
+    assert client.get("/episodes/due", headers=auth_headers).json()["due"] == []
+
+
+def test_applications_before_relapse_do_not_satisfy_relapsed_phase_one_slot(client, auth_headers, monkeypatch):
+    import app.services as services
+
+    episode = _create_taper_episode(client, auth_headers, location_code="relapse_ignores_old_application")
+    episode_id = episode["id"]
+    old_application = client.post(
+        "/applications",
+        headers=auth_headers,
+        json={"episode_id": episode_id, "applied_at": "2026-04-06T09:00:00Z"},
+    )
+    assert old_application.status_code == 201
+    client.post(
+        f"/episodes/{episode_id}/relapse",
+        headers=auth_headers,
+        json={"reported_at": "2026-04-06T10:00:00Z", "reason": "symptoms_returned"},
+    )
+
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 10, 5, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    assert len(due) == 1
+    assert due[0]["episode_id"] == episode_id
+    assert due[0]["due_slot"] == "morning"
+    assert due[0]["applications_completed_today"] == 0
+
+
+def test_next_day_after_evening_relapse_resumes_two_phase_one_slots(client, auth_headers, monkeypatch):
+    import app.services as services
+
+    episode = _create_taper_episode(client, auth_headers, location_code="relapse_next_day")
+    episode_id = episode["id"]
+    client.post(
+        f"/episodes/{episode_id}/relapse",
+        headers=auth_headers,
+        json={"reported_at": "2026-04-06T19:00:00Z", "reason": "symptoms_returned"},
+    )
+    client.post(
+        "/applications",
+        headers=auth_headers,
+        json={"episode_id": episode_id, "applied_at": "2026-04-06T19:15:00Z"},
+    )
+
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 7, 9, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    assert len(due) == 1
+    assert due[0]["episode_id"] == episode_id
+    assert due[0]["due_slot"] == "morning"
+    assert due[0]["applications_completed_today"] == 0
+    assert due[0]["applications_expected_today"] == 2
