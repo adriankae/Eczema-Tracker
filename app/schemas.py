@@ -231,6 +231,10 @@ class DueItem(BaseModel):
     treatment_due_today: bool
     next_due_at: datetime | None
     last_application_at: datetime | None
+    due_slot: str | None = None
+    missed_slots_today: list[str] = Field(default_factory=list)
+    applications_completed_today: int = 0
+    applications_expected_today: int = 0
 
 
 class DueListResponse(BaseModel):

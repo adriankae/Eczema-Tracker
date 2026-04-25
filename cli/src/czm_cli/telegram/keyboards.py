@@ -6,10 +6,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Start episode", callback_data="menu:start_episode"), InlineKeyboardButton("Log treatment", callback_data="menu:log_treatment")],
-            [InlineKeyboardButton("Due today", callback_data="menu:due"), InlineKeyboardButton("Adherence", callback_data="menu:adherence")],
-            [InlineKeyboardButton("Heal episode", callback_data="menu:heal"), InlineKeyboardButton("Relapse episode", callback_data="menu:relapse")],
-            [InlineKeyboardButton("Locations", callback_data="menu:locations"), InlineKeyboardButton("Subjects", callback_data="menu:subjects")],
+            [InlineKeyboardButton("Start episode", callback_data="menu:start_episode"), InlineKeyboardButton("Due today", callback_data="menu:due")],
+            [InlineKeyboardButton("Adherence", callback_data="menu:adherence"), InlineKeyboardButton("Heal episode", callback_data="menu:heal")],
+            [InlineKeyboardButton("Relapse episode", callback_data="menu:relapse"), InlineKeyboardButton("Locations", callback_data="menu:locations")],
+            [InlineKeyboardButton("Subjects", callback_data="menu:subjects")],
         ]
     )
 
@@ -17,10 +17,10 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 def main_menu_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("Start episode"), KeyboardButton("Log treatment")],
-            [KeyboardButton("Due today"), KeyboardButton("Adherence")],
-            [KeyboardButton("Heal episode"), KeyboardButton("Relapse episode")],
-            [KeyboardButton("Locations"), KeyboardButton("Subjects")],
+            [KeyboardButton("Start episode"), KeyboardButton("Due today")],
+            [KeyboardButton("Adherence"), KeyboardButton("Heal episode")],
+            [KeyboardButton("Relapse episode"), KeyboardButton("Locations")],
+            [KeyboardButton("Subjects")],
         ],
         resize_keyboard=True,
         is_persistent=True,

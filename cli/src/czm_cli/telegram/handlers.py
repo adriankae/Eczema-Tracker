@@ -450,7 +450,6 @@ async def handle_text_message(update, context, handler_ctx: TelegramHandlerConte
     text = (getattr(message, "text", "") or "").strip()
     mapping = {
         "Start episode": "menu:start_episode",
-        "Log treatment": "menu:log_treatment",
         "Due today": "menu:due",
         "Adherence": "menu:adherence",
         "Heal episode": "menu:heal",
@@ -458,6 +457,17 @@ async def handle_text_message(update, context, handler_ctx: TelegramHandlerConte
         "Locations": "menu:locations",
         "Subjects": "menu:subjects",
     }
+    if text == "Log treatment":
+        try:
+            ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
+            await message.reply_text("Log treatment moved to Due today.", reply_markup=_reply_keyboard_for_update(update))
+            await _send_due_prompts_from_message(message, handler_ctx)
+        except CzmError as exc:
+            reply = exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)
+            await message.reply_text(reply, reply_markup=_reply_keyboard_for_update(update))
+        except Exception:
+            await message.reply_text("Zema request failed.", reply_markup=_reply_keyboard_for_update(update))
+        return
     if text in mapping:
         try:
             ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))

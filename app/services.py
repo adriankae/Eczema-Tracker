@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.security import create_access_token, generate_api_key, hash_api_key, hash_password, verify_password
-from app.core.time import add_calendar_days, local_date, local_midnight, utc_now
+from app.core.time import add_calendar_days, deployment_tz, local_date, local_midnight, to_local, utc_now
 from app.models import (
     Account,
     AccountApiKey,
@@ -622,9 +622,45 @@ def list_events(db: Session, account: Account, episode_id: int, event_type: str 
     return list(db.execute(stmt.order_by(EpisodeEvent.occurred_at.asc(), EpisodeEvent.id.asc())).scalars())
 
 
+def _phase_one_slot_due_item(episode: EczemaEpisode, phase: TaperProtocolPhase, applications: list[TreatmentApplication], now: datetime) -> dict | None:
+    local_now = to_local(now)
+    today = local_now.date()
+    cutoff_local = datetime.combine(today, time(14, 0), tzinfo=deployment_tz())
+    day_start = local_midnight(today)
+    cutoff = cutoff_local.astimezone(timezone.utc)
+
+    phase_one_today = [
+        application
+        for application in applications
+        if (application.phase_number_snapshot in {None, 1}) and to_local(application.applied_at).date() == today
+    ]
+    morning_satisfied = any(to_local(application.applied_at) < cutoff_local for application in phase_one_today)
+    evening_satisfied = any(to_local(application.applied_at) >= cutoff_local for application in phase_one_today)
+    last_application_at = applications[-1].applied_at if applications else None
+    base = {
+        "episode_id": episode.id,
+        "subject_id": episode.subject_id,
+        "location_id": episode.location_id,
+        "current_phase_number": episode.current_phase_number,
+        "treatment_due_today": True,
+        "last_application_at": last_application_at,
+        "applications_completed_today": len(phase_one_today),
+        "applications_expected_today": phase.applications_per_day,
+    }
+    if local_now < cutoff_local:
+        if morning_satisfied:
+            return None
+        return {**base, "next_due_at": day_start, "due_slot": "morning", "missed_slots_today": []}
+    if evening_satisfied:
+        return None
+    missed_slots = [] if morning_satisfied else ["morning"]
+    return {**base, "next_due_at": cutoff, "due_slot": "evening", "missed_slots_today": missed_slots}
+
+
 def due_items(db: Session, account: Account, subject_id: int | None = None) -> list[dict]:
     episodes = list_episodes(db, account, subject_id=subject_id)
     items: list[dict] = []
+    now = utc_now()
     for episode in episodes:
         if episode.status == "obsolete":
             continue
@@ -642,29 +678,19 @@ def due_items(db: Session, account: Account, subject_id: int | None = None) -> l
         last_application_at = applications[-1].applied_at if applications else None
         if episode.current_phase_number == 1:
             phase = get_protocol_phase(db, 1)
-            local_today = local_date(utc_now())
-            count_today = sum(1 for app in applications if local_date(app.applied_at) == local_today)
-            due_today = count_today < phase.applications_per_day
-            next_due_date = local_midnight(local_today) if due_today else None
-            items.append(
-                {
-                    "episode_id": episode.id,
-                    "subject_id": episode.subject_id,
-                    "location_id": episode.location_id,
-                    "current_phase_number": episode.current_phase_number,
-                    "treatment_due_today": due_today,
-                    "next_due_at": next_due_date,
-                    "last_application_at": last_application_at,
-                }
-            )
+            item = _phase_one_slot_due_item(episode, phase, applications, now)
+            if item is not None:
+                items.append(item)
             continue
         phase = get_protocol_phase(db, episode.current_phase_number)
         anchor = last_application_at or episode.phase_started_at
         anchor_date = local_date(anchor)
         interval = phase.apply_every_n_days
-        today = local_date(utc_now())
+        today = local_date(now)
         days_since_anchor = (today - anchor_date).days
         due_today = days_since_anchor >= interval
+        if not due_today:
+            continue
         next_due_date = local_midnight(today if due_today else anchor_date + timedelta(days=interval))
         items.append(
             {
@@ -675,6 +701,10 @@ def due_items(db: Session, account: Account, subject_id: int | None = None) -> l
                 "treatment_due_today": due_today,
                 "next_due_at": next_due_date,
                 "last_application_at": last_application_at,
+                "due_slot": None,
+                "missed_slots_today": [],
+                "applications_completed_today": 0,
+                "applications_expected_today": phase.applications_per_day,
             }
         )
     return items

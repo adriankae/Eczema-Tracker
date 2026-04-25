@@ -10,15 +10,17 @@ from czm_cli.telegram.state import ConversationStore
 
 
 class FakeClient:
-    def __init__(self, *, allow_empty=False, image: bytes | None = b"image-bytes"):
+    def __init__(self, *, allow_empty=False, image: bytes | None = b"image-bytes", empty_after_log=False):
         self.requests = []
         self.allow_empty = allow_empty
         self.image = image
+        self.empty_after_log = empty_after_log
+        self.logged = False
 
     def get(self, path, params=None):
         self.requests.append(("GET", path, params))
         if path == "/episodes/due":
-            if self.allow_empty:
+            if self.allow_empty or (self.empty_after_log and self.logged):
                 return {"due": []}
             return {"due": [{"episode_id": 12, "subject_id": 1, "location_id": 2, "current_phase_number": 1, "treatment_due_today": True}]}
         if path == "/subjects":
@@ -32,6 +34,7 @@ class FakeClient:
     def post(self, path, json=None, params=None):
         self.requests.append(("POST", path, json))
         if path == "/applications":
+            self.logged = True
             return {"application": {"id": 1, "episode_id": json["episode_id"]}}
         if path == "/subjects":
             return {"id": 3, "display_name": json["display_name"]}
@@ -80,9 +83,9 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_handler(*, allow_writes=True, chat_id=123, user_id=1, allow_empty=False, image=b"image-bytes"):
+def make_handler(*, allow_writes=True, chat_id=123, user_id=1, allow_empty=False, image=b"image-bytes", empty_after_log=False):
     config = AppConfig(timezone="UTC", telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123], allow_writes=allow_writes))
-    client = FakeClient(allow_empty=allow_empty, image=image)
+    client = FakeClient(allow_empty=allow_empty, image=image, empty_after_log=empty_after_log)
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
     update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
     return ctx, client, update
@@ -96,6 +99,20 @@ def test_menu_returns_main_keyboard():
     run(handler(update, None))
     assert message.replies[0][0].startswith("Zema")
     assert message.replies[0][1] is not None
+    labels = [button.text for row in message.replies[0][1].inline_keyboard for button in row]
+    assert "Log treatment" not in labels
+    assert "Due today" in labels
+
+
+def test_persistent_reply_keyboard_does_not_include_log_treatment():
+    app = build_application(TelegramRuntime(config=AppConfig(telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123])), client=FakeClient()))
+    handler = app.handlers[0][0].callback
+    message = FakeMessage("/menu")
+    update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
+    run(handler(update, None))
+    labels = [button.text for row in message.replies[0][1].keyboard for button in row]
+    assert "Log treatment" not in labels
+    assert "Due today" in labels
 
 
 def test_due_callback_includes_log_buttons_when_writes_enabled():
@@ -159,9 +176,10 @@ def test_reply_keyboard_log_treatment_reuses_due_prompts():
     message = FakeMessage("Log treatment")
     update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
     run(handle_text_message(update, None, ctx))
-    assert message.replies[0][0] == "Due prompts below."
-    assert "Left elbow" in message.replies[1][0]
-    assert "Episode 12" not in message.replies[1][0]
+    assert message.replies[0][0] == "Log treatment moved to Due today."
+    assert message.replies[1][0] == "Due prompts below."
+    assert "Left elbow" in message.replies[2][0]
+    assert "Episode 12" not in message.replies[2][0]
 
 
 def test_reply_keyboard_due_today_empty_state():
@@ -188,6 +206,24 @@ def test_quick_log_button_posts_application():
     run(handle_callback(update, None, ctx))
     assert ("POST", "/applications", {"episode_id": 12}) in client.requests
     assert "Logged application for Left elbow" in query.edits[0][0]
+
+
+def test_due_today_fetches_fresh_backend_state_after_logging():
+    ctx, client, update = make_handler(allow_writes=True, empty_after_log=True)
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Left elbow" in query.message.replies[0][0]
+
+    query = FakeQuery("due:log:12")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert ("POST", "/applications", {"episode_id": 12}) in client.requests
+
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert query.edits[0][0] == "No treatments are due right now."
 
 
 def test_quick_log_button_falls_back_when_due_item_cannot_be_resolved():
