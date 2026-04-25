@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -229,3 +229,67 @@ class DueListResponse(BaseModel):
 
 class ApiKeyListResponse(BaseModel):
     api_keys: list[ApiKeyOut]
+
+
+class AdherenceDayOut(BaseModel):
+    date: date
+    episode_id: int
+    subject_id: int
+    location_id: int
+    phase_number: int
+    expected_applications: int
+    completed_applications: int
+    credited_applications: int
+    status: str
+    source: str
+    calculated_at: datetime
+    finalized_at: datetime | None
+
+
+class AdherenceCalendarResponse(BaseModel):
+    days: list[AdherenceDayOut]
+
+
+class AdherenceSummaryResponse(BaseModel):
+    from_date: date = Field(alias="from")
+    to_date: date = Field(alias="to")
+    expected_applications: int
+    completed_applications: int
+    credited_applications: int
+    adherence_score: float | None
+    completed_days: int
+    partial_days: int
+    missed_days: int
+    not_due_days: int
+    future_days: int
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AdherenceSummaryMetrics(AdherenceSummaryResponse):
+    pass
+
+
+class EpisodeAdherenceResponse(BaseModel):
+    episode_id: int
+    from_date: date = Field(alias="from")
+    to_date: date = Field(alias="to")
+    summary: AdherenceSummaryMetrics
+    days: list[AdherenceDayOut]
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AdherenceRebuildRequest(BaseModel):
+    episode_id: int | None = None
+    from_date: date = Field(alias="from")
+    to_date: date = Field(alias="to")
+    active_only: bool = True
+    source: str = "rebuild"
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AdherenceRebuildResponse(BaseModel):
+    episodes_processed: int
+    rows_persisted: int

@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status
+from datetime import date
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.adherence import list_adherence_rows, persist_episode_adherence, rebuild_active_episode_adherence, summarize_adherence
 from app.dependencies import ActorContext, get_current_actor
 from app.core.database import get_db
 from app.core.time import utc_now
 from app.schemas import (
     AccountOut,
+    AdherenceCalendarResponse,
+    AdherenceDayOut,
+    AdherenceRebuildRequest,
+    AdherenceRebuildResponse,
+    AdherenceSummaryMetrics,
+    AdherenceSummaryResponse,
     AdvanceEpisodeRequest,
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
@@ -26,6 +35,7 @@ from app.schemas import (
     EpisodeListResponse,
     EpisodeResponse,
     EventListResponse,
+    EpisodeAdherenceResponse,
     HealEpisodeRequest,
     LoginRequest,
     LoginResponse,
@@ -90,6 +100,40 @@ def _subject_response(subject) -> SubjectOut:
 
 def _event_list(events) -> EventListResponse:
     return EventListResponse(events=events)
+
+
+def _adherence_day_response(row) -> AdherenceDayOut:
+    return AdherenceDayOut(
+        date=row.date,
+        episode_id=row.episode_id,
+        subject_id=row.subject_id,
+        location_id=row.location_id,
+        phase_number=row.phase_number,
+        expected_applications=row.expected_applications,
+        completed_applications=row.completed_applications,
+        credited_applications=row.credited_applications,
+        status=row.status,
+        source=getattr(row, "source", "calculated"),
+        calculated_at=row.calculated_at,
+        finalized_at=getattr(row, "finalized_at", None),
+    )
+
+
+def _adherence_summary_response(from_date: date, to_date: date, rows) -> AdherenceSummaryResponse:
+    summary = summarize_adherence(rows)
+    return AdherenceSummaryResponse(
+        from_date=from_date,
+        to_date=to_date,
+        expected_applications=summary.expected_total,
+        completed_applications=summary.completed_total,
+        credited_applications=summary.credited_total,
+        adherence_score=summary.adherence_score,
+        completed_days=summary.completed_day_count,
+        partial_days=summary.partial_day_count,
+        missed_days=summary.missed_day_count,
+        not_due_days=summary.not_due_day_count,
+        future_days=summary.future_day_count,
+    )
 
 
 def install_error_handlers(app: FastAPI) -> None:
@@ -195,9 +239,123 @@ def episodes_due(subject_id: int | None = None, actor: ActorContext = Depends(ge
     return DueListResponse(due=due_items(db, actor.account, subject_id))
 
 
+@router.get("/adherence/calendar", response_model=AdherenceCalendarResponse)
+def adherence_calendar(
+    episode_id: int | None = None,
+    subject_id: int | None = None,
+    location_id: int | None = None,
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+    persisted: bool = False,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    rows = list_adherence_rows(
+        db,
+        actor.account,
+        from_date,
+        to_date,
+        episode_id=episode_id,
+        subject_id=subject_id,
+        location_id=location_id,
+        persisted=persisted,
+    )
+    return AdherenceCalendarResponse(days=[_adherence_day_response(row) for row in rows])
+
+
+@router.get("/adherence/summary", response_model=AdherenceSummaryResponse)
+def adherence_summary(
+    episode_id: int | None = None,
+    subject_id: int | None = None,
+    location_id: int | None = None,
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+    persisted: bool = False,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    rows = list_adherence_rows(
+        db,
+        actor.account,
+        from_date,
+        to_date,
+        episode_id=episode_id,
+        subject_id=subject_id,
+        location_id=location_id,
+        persisted=persisted,
+    )
+    return _adherence_summary_response(from_date, to_date, rows)
+
+
+@router.get("/adherence/missed", response_model=AdherenceCalendarResponse)
+def adherence_missed(
+    episode_id: int | None = None,
+    subject_id: int | None = None,
+    location_id: int | None = None,
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+    persisted: bool = False,
+    include_partial: bool = False,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    rows = list_adherence_rows(
+        db,
+        actor.account,
+        from_date,
+        to_date,
+        episode_id=episode_id,
+        subject_id=subject_id,
+        location_id=location_id,
+        persisted=persisted,
+    )
+    statuses = {"missed", "partial"} if include_partial else {"missed"}
+    return AdherenceCalendarResponse(days=[_adherence_day_response(row) for row in rows if row.status in statuses])
+
+
+@router.post("/adherence/rebuild", response_model=AdherenceRebuildResponse)
+def adherence_rebuild(payload: AdherenceRebuildRequest, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    if payload.episode_id is not None:
+        rows = persist_episode_adherence(
+            db,
+            actor.account,
+            payload.episode_id,
+            payload.from_date,
+            payload.to_date,
+            source=payload.source,
+        )
+        return AdherenceRebuildResponse(episodes_processed=1, rows_persisted=len(rows))
+
+    if not payload.active_only:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="all-episode rebuild is not supported")
+
+    rows = rebuild_active_episode_adherence(db, actor.account, payload.from_date, payload.to_date, source=payload.source)
+    return AdherenceRebuildResponse(episodes_processed=len({row.episode_id for row in rows}), rows_persisted=len(rows))
+
+
 @router.get("/episodes/{episode_id}", response_model=EpisodeResponse)
 def episodes_get(episode_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
     return _episode_response(get_episode(db, actor.account, episode_id))
+
+
+@router.get("/episodes/{episode_id}/adherence", response_model=EpisodeAdherenceResponse)
+def episode_adherence(
+    episode_id: int,
+    from_date: date = Query(alias="from"),
+    to_date: date = Query(alias="to"),
+    persisted: bool = False,
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    rows = list_adherence_rows(db, actor.account, from_date, to_date, episode_id=episode_id, persisted=persisted)
+    summary = _adherence_summary_response(from_date, to_date, rows)
+    return EpisodeAdherenceResponse(
+        episode_id=episode_id,
+        from_date=from_date,
+        to_date=to_date,
+        summary=AdherenceSummaryMetrics(**summary.model_dump()),
+        days=[_adherence_day_response(row) for row in rows],
+    )
 
 
 @router.post("/episodes/{episode_id}/heal", response_model=EpisodeResponse)
@@ -281,4 +439,3 @@ def events_list(episode_id: int, event_type: str | None = None, actor: ActorCont
 def episode_timeline(episode_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
     events = list_events(db, actor.account, episode_id)
     return TimelineResponse(timeline=events)
-

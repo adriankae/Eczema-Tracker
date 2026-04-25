@@ -8,8 +8,10 @@ Self-hosted eczema episode tracking backend for one authenticated account, multi
 - [Release 0.1](#release-01)
 - [Features](#features)
 - [Runtime Requirements](#runtime-requirements)
+- [Repository Layout](#repository-layout)
 - [Quick Start](#quick-start)
 - [Getting Started](#getting-started)
+- [Adherence Tracking](#adherence-tracking)
 - [API Documentation](#api-documentation)
 - [Data Model](#data-model)
 - [Development](#development)
@@ -29,7 +31,7 @@ This project provides a production-ready v1 backend for tracking eczema treatmen
 - Pydantic models
 - an in-process scheduler
 
-The system is designed to stay simple and self-hostable while leaving room for a future CLI or agent client.
+The system is designed to stay simple and self-hostable with a separate CLI and agent runtime.
 
 ## Release 0.1
 
@@ -42,6 +44,7 @@ Version `0.1.0` is the first release of the backend and includes:
 - treatment application tracking
 - event logging and episode timelines
 - due calculations
+- adherence calendar, summary, missed-day, and rebuild workflows
 - automatic phase progression
 - Dockerized local deployment
 - automated tests
@@ -73,8 +76,9 @@ Version `0.1.0` is the first release of the backend and includes:
 
 ### Deployment
 
-- Dockerfile for the API
-- Docker Compose with API + PostgreSQL
+- Dockerfile for the API/backend artifact, `zema-be`
+- Dockerfile for the CLI/agent runtime artifact, `zema-cli`
+- Docker Compose with backend, CLI runtime, and PostgreSQL
 - Alembic migration at container startup
 
 ## Runtime Requirements
@@ -88,6 +92,20 @@ Required:
 - PostgreSQL, if running outside Docker
 
 The Docker image uses `python:3.11-slim`.
+
+## Repository Layout
+
+This repository contains two separate Python packages and two separate deployable artifacts.
+
+- The backend package lives at the repository root and builds the `zema-be` API container.
+- The CLI package lives under `cli/` and builds the `zema-cli` runtime container.
+- `zema-be` is the API and source of truth for treatment, due, adherence, and phase logic.
+- `zema-cli` is a client, tooling, and agent runtime that talks to the backend over HTTP.
+- `zema-cli` does not own or duplicate backend business logic.
+
+The preferred CLI command is `zema`. The older `czm` command remains available as a compatibility alias.
+
+External Telegram, Hermes, or OpenClaw gateways should either install and call `zema`/`czm` directly, or run the `zema-cli` container as a subprocess-like tool. Gateway code should not run inside the `zema-be` backend container. Use `--json` for agent-safe output.
 
 ## Quick Start
 
@@ -116,6 +134,37 @@ curl http://localhost:28173/health
 curl -s http://localhost:28173/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}'
+```
+
+### CLI container
+
+The CLI runtime is available as the separate `zema-cli` service. It uses these environment variables:
+
+- `CZM_BASE_URL`
+- `CZM_API_KEY`
+- `CZM_TIMEZONE`
+
+In Docker Compose, `zema-cli` uses `CZM_BASE_URL=http://zema-be:28173`.
+
+Build all images:
+
+```bash
+docker compose build
+```
+
+Start the backend:
+
+```bash
+docker compose up -d postgres zema-be
+```
+
+Run the CLI:
+
+```bash
+docker compose run --rm zema-cli zema --help
+docker compose run --rm zema-cli zema adherence summary --last 30 --json
+CZM_API_KEY=... docker compose run --rm zema-cli zema due list --json
+CZM_API_KEY=... docker compose run --rm zema-cli zema adherence summary --last 30 --json
 ```
 
 ## Getting Started
@@ -161,6 +210,38 @@ When an episode is marked healed:
 - it enters phase 2 immediately
 - the scheduler later advances it through phases 3 to 7
 - after phase 7 completes, the episode becomes obsolete
+
+## Adherence Tracking
+
+Adherence tracking is exposed through backend APIs and the `zema adherence` CLI commands. The backend remains the source of truth; the CLI only constructs HTTP requests, parses responses, renders terminal output, and returns exit codes.
+
+Persisted adherence snapshots use a fixed taper protocol schedule anchored to each phase start date. This is intentionally separate from `/episodes/due`, which remains the operational due/reminder endpoint.
+
+Important behavior:
+
+- GET adherence endpoints default to dynamic read-only calculation and do not persist rows.
+- Passing `persisted=true` returns stored audit rows from `episode_daily_adherence` only.
+- `POST /adherence/rebuild` persists or rebuilds adherence rows.
+- Extra applications count in `completed_applications`.
+- `credited_applications` is capped at `expected_applications`, so extra applications do not inflate the score.
+- The adherence score is `sum(credited_applications) / sum(expected_applications)`.
+- If there are no expected applications in the range, `adherence_score` is `null`.
+
+CLI examples:
+
+```bash
+zema adherence calendar --last 30
+zema adherence summary --last 30 --json
+zema adherence missed --from 2026-04-01 --to 2026-04-30
+zema adherence episode 1 --last 14
+zema adherence rebuild --episode 1 --from 2026-04-01 --to 2026-04-30
+```
+
+The compatibility alias also works:
+
+```bash
+czm adherence summary --last 30 --json
+```
 
 ## API Documentation
 
@@ -680,6 +761,121 @@ curl -s "http://localhost:28173/episodes/due?subject_id=1" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+### `GET /adherence/calendar`
+
+Returns adherence days for a bounded date range. By default this calculates dynamically and does not persist rows.
+
+Mandatory fields:
+
+- `from` query parameter, `YYYY-MM-DD`
+- `to` query parameter, `YYYY-MM-DD`
+
+Optional fields:
+
+- `episode_id`
+- `subject_id`
+- `location_id`
+- `persisted` defaults to `false`; when `true`, returns stored audit rows only
+
+Example request:
+
+```bash
+curl -s "http://localhost:28173/adherence/calendar?from=2026-04-01&to=2026-04-30" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /adherence/summary`
+
+Returns adherence totals and score for the same filters as the calendar endpoint.
+
+Mandatory fields:
+
+- `from` query parameter
+- `to` query parameter
+
+Optional fields:
+
+- `episode_id`
+- `subject_id`
+- `location_id`
+- `persisted` defaults to `false`
+
+Example request:
+
+```bash
+curl -s "http://localhost:28173/adherence/summary?from=2026-04-01&to=2026-04-30" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /adherence/missed`
+
+Returns missed adherence days for a bounded date range.
+
+Mandatory fields:
+
+- `from` query parameter
+- `to` query parameter
+
+Optional fields:
+
+- `episode_id`
+- `subject_id`
+- `location_id`
+- `persisted` defaults to `false`
+- `include_partial` defaults to `false`
+
+Example request:
+
+```bash
+curl -s "http://localhost:28173/adherence/missed?from=2026-04-01&to=2026-04-30&include_partial=true" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `GET /episodes/{episode_id}/adherence`
+
+Returns episode-specific adherence days and summary.
+
+Mandatory fields:
+
+- `episode_id` path parameter
+- `from` query parameter
+- `to` query parameter
+
+Optional fields:
+
+- `persisted` defaults to `false`
+
+Example request:
+
+```bash
+curl -s "http://localhost:28173/episodes/1/adherence?from=2026-04-01&to=2026-04-30" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### `POST /adherence/rebuild`
+
+Persists or rebuilds adherence snapshots. This is the explicit write operation for `episode_daily_adherence`.
+
+Mandatory fields:
+
+- `from`
+- `to`
+
+Optional fields:
+
+- `episode_id`; when omitted, active/current episodes are rebuilt
+- `active_only` defaults to `true`
+- `source` defaults to `rebuild`
+
+Example request:
+
+```bash
+curl -s http://localhost:28173/adherence/rebuild \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"episode_id":1,"from":"2026-04-01","to":"2026-04-30","source":"rebuild"}'
+```
+
 ## Data Model
 
 The database includes:
@@ -692,6 +888,7 @@ The database includes:
 - `taper_protocol_phases`
 - `episode_phase_history`
 - `treatment_applications`
+- `episode_daily_adherence`
 - `episode_events`
 
 ## Development
@@ -722,7 +919,9 @@ source .venv/bin/activate
 ### Tests
 
 ```bash
-.venv/bin/pytest -q
+.venv/bin/python -m pytest tests
+.venv/bin/python -m pip install -e cli
+.venv/bin/python -m pytest cli/tests
 ```
 
 ## Testing
@@ -735,6 +934,7 @@ The test suite covers:
 - episode lifecycle
 - scheduler behavior
 - application CRUD and due logic
+- adherence persistence, API endpoints, and CLI commands
 - event emission
 - account scoping
 
@@ -753,7 +953,7 @@ That is normal for the Alpine Postgres image and does not stop the database from
 Check the logs:
 
 ```bash
-docker compose logs api
+docker compose logs zema-be
 docker compose logs postgres
 ```
 

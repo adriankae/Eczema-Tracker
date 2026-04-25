@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
+    CheckConstraint,
     JSON,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -145,6 +147,47 @@ class TreatmentApplication(Base):
     voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class EpisodeDailyAdherence(Base):
+    __tablename__ = "episode_daily_adherence"
+    __table_args__ = (
+        UniqueConstraint("episode_id", "date", name="uq_episode_daily_adherence_episode_date"),
+        CheckConstraint("expected_applications >= 0", name="ck_episode_daily_adherence_expected_nonnegative"),
+        CheckConstraint("completed_applications >= 0", name="ck_episode_daily_adherence_completed_nonnegative"),
+        CheckConstraint("credited_applications >= 0", name="ck_episode_daily_adherence_credited_nonnegative"),
+        CheckConstraint("credited_applications <= expected_applications", name="ck_episode_daily_adherence_credited_lte_expected"),
+        CheckConstraint(
+            "status in ('completed', 'partial', 'missed', 'not_due', 'future')",
+            name="ck_episode_daily_adherence_status",
+        ),
+        CheckConstraint(
+            "source in ('calculated', 'backfill', 'rebuild', 'system')",
+            name="ck_episode_daily_adherence_source",
+        ),
+        Index("ix_episode_daily_adherence_account_date", "account_id", "date"),
+        Index("ix_episode_daily_adherence_episode_date", "episode_id", "date"),
+        Index("ix_episode_daily_adherence_subject_date", "subject_id", "date"),
+        Index("ix_episode_daily_adherence_location_date", "location_id", "date"),
+        Index("ix_episode_daily_adherence_status_date", "status", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    episode_id: Mapped[int] = mapped_column(ForeignKey("eczema_episodes.id", ondelete="CASCADE"), nullable=False)
+    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
+    location_id: Mapped[int] = mapped_column(ForeignKey("body_locations.id", ondelete="CASCADE"), nullable=False)
+    date: Mapped[date] = mapped_column(Date, nullable=False)
+    phase_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_applications: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed_applications: Mapped[int] = mapped_column(Integer, nullable=False)
+    credited_applications: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    calculated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 

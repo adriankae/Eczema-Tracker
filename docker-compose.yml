@@ -13,8 +13,10 @@ services:
       timeout: 5s
       retries: 10
 
-  api:
-    build: .
+  zema-be:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://eczema:eczema@postgres:5432/eczema
       APP_ENV: local
@@ -29,3 +31,16 @@ services:
         condition: service_healthy
     ports:
       - "28173:28173"
+
+  zema-cli:
+    build:
+      context: .
+      dockerfile: docker/cli.Dockerfile
+    environment:
+      CZM_BASE_URL: http://zema-be:28173
+      CZM_TIMEZONE: Europe/Berlin
+      CZM_API_KEY: ${CZM_API_KEY:-}
+    depends_on:
+      - zema-be
+    profiles:
+      - cli
