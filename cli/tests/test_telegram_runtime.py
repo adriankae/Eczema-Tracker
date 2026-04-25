@@ -6,7 +6,7 @@ import pytest
 
 from czm_cli.config import AppConfig, TelegramConfig
 from czm_cli.errors import EXIT_AUTH
-from czm_cli.telegram.runtime import TelegramRuntime, build_application
+from czm_cli.telegram.runtime import TelegramRuntime, build_application, register_command_menu
 from czm_cli.telegram.security import TelegramIdentity, ensure_allowed
 
 
@@ -17,6 +17,14 @@ class FakeMessage:
 
     async def reply_text(self, text, **kwargs):
         self.replies.append(text)
+
+
+class FakeBot:
+    def __init__(self):
+        self.commands = None
+
+    async def set_my_commands(self, commands):
+        self.commands = commands
 
 
 class FakeObj:
@@ -60,6 +68,15 @@ def config(*, chats=None, users=None, allow_writes=True, allow_rebuild=False):
 def test_build_application_registers_handlers():
     app = build_application(TelegramRuntime(config=config(), client=FakeClient()))
     assert app.handlers
+
+
+def test_register_command_menu_sets_telegram_commands():
+    bot = FakeBot()
+    run(register_command_menu(FakeObj(bot=bot)))
+    names = [command.command for command in bot.commands]
+    assert names[:4] == ["start", "menu", "help", "status"]
+    assert "due" in names
+    assert "adherence" in names
 
 
 def test_unknown_chat_rejected():

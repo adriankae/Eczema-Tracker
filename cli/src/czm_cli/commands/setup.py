@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from ..bootstrap import DEFAULT_BASE_URL, BootstrapResult, bootstrap_config, detect_local_timezone
-from ..config import apply_env_overrides, load_app_config, parse_bool, write_app_config, xdg_config_path
+from ..config import TelegramReminderConfig, apply_env_overrides, load_app_config, parse_bool, write_app_config, xdg_config_path
 from ..errors import CzmError, EXIT_USAGE
 from ..telegram.setup import (
     create_api_key_from_login,
@@ -186,6 +186,7 @@ def handle_telegram_setup(ctx, args) -> int:
     existing.telegram.allow_adherence_rebuild = allow_rebuild
     existing.telegram.default_subject = default_subject
     existing.telegram.default_location = default_location
+    existing.telegram.reminders = TelegramReminderConfig(timezone=timezone)
     write_app_config(config_path, existing, overwrite=True)
     _emit_telegram_setup(config_path, json_output=bool(getattr(args, "json", False)))
     return 0

@@ -77,11 +77,21 @@ def test_telegram_env_var_parsing(monkeypatch):
     monkeypatch.setenv("ZEMA_TELEGRAM_ALLOWED_USER_IDS", "999")
     monkeypatch.setenv("ZEMA_TELEGRAM_ALLOW_WRITES", "false")
     monkeypatch.setenv("ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD", "yes")
+    monkeypatch.setenv("ZEMA_TELEGRAM_REMINDERS_ENABLED", "false")
+    monkeypatch.setenv("ZEMA_TELEGRAM_REMINDER_MORNING_TIME", "06:30")
+    monkeypatch.setenv("ZEMA_TELEGRAM_REMINDER_EVENING_TIME", "20:15")
+    monkeypatch.setenv("ZEMA_TELEGRAM_REMINDER_SEND_IMAGES", "no")
+    monkeypatch.setenv("ZEMA_TELEGRAM_REMINDER_SNOOZE_MINUTES", "45")
     resolved = apply_env_overrides(config)
     assert resolved.telegram.allowed_chat_ids == [123, 456]
     assert resolved.telegram.allowed_user_ids == [999]
     assert resolved.telegram.allow_writes is False
     assert resolved.telegram.allow_adherence_rebuild is True
+    assert resolved.telegram.reminders.enabled is False
+    assert resolved.telegram.reminders.morning_time == "06:30"
+    assert resolved.telegram.reminders.evening_time == "20:15"
+    assert resolved.telegram.reminders.send_location_images is False
+    assert resolved.telegram.reminders.snooze_minutes == 45
 
 
 def test_invalid_telegram_env_var(monkeypatch):
@@ -124,6 +134,26 @@ def test_telegram_config_mutators(tmp_path):
     assert "allow_writes = false" in config_path.read_text(encoding="utf-8")
     assert cli_module.main(["telegram", "config", "allow-adherence-rebuild", "true", "--config", str(config_path)]) == 0
     assert "allow_adherence_rebuild = true" in config_path.read_text(encoding="utf-8")
+
+
+def test_telegram_reminder_config_commands(tmp_path, capsys):
+    config_path = tmp_path / "config.toml"
+    write_config(config_path)
+    assert cli_module.main(["telegram", "config", "reminders", "show", "--config", str(config_path)]) == 0
+    assert "morning_time: 07:00" in capsys.readouterr().out
+
+    assert cli_module.main(["telegram", "config", "reminders", "disable", "--config", str(config_path)]) == 0
+    assert "enabled = false" in config_path.read_text(encoding="utf-8")
+    assert cli_module.main(["telegram", "config", "reminders", "enable", "--config", str(config_path)]) == 0
+    assert "enabled = true" in config_path.read_text(encoding="utf-8")
+    assert cli_module.main(["telegram", "config", "reminders", "set-morning", "06:45", "--config", str(config_path)]) == 0
+    assert 'morning_time = "06:45"' in config_path.read_text(encoding="utf-8")
+    assert cli_module.main(["telegram", "config", "reminders", "set-evening", "20:30", "--config", str(config_path)]) == 0
+    assert 'evening_time = "20:30"' in config_path.read_text(encoding="utf-8")
+    assert cli_module.main(["telegram", "config", "reminders", "set-snooze", "45", "--config", str(config_path)]) == 0
+    assert "snooze_minutes = 45" in config_path.read_text(encoding="utf-8")
+    assert cli_module.main(["telegram", "config", "reminders", "images", "false", "--config", str(config_path)]) == 0
+    assert "send_location_images = false" in config_path.read_text(encoding="utf-8")
 
 
 def test_telegram_status_masks_secrets(tmp_path, capsys):

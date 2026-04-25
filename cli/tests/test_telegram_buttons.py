@@ -99,7 +99,8 @@ def test_due_callback_hides_log_buttons_when_writes_disabled():
     query = FakeQuery("menu:due")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
-    assert query.edits[0][1] is None
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert labels == ["Open menu"]
 
 
 def test_quick_log_button_posts_application():

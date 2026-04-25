@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from czm_cli.config import AppConfig, DEFAULT_BASE_URL, TelegramConfig, normalize_base_url, write_app_config
+from czm_cli.config import AppConfig, DEFAULT_BASE_URL, TelegramConfig, TelegramReminderConfig, normalize_base_url, write_app_config
 from czm_cli.errors import CzmError, EXIT_CONFLICT, EXIT_USAGE
 from czm_cli.telegram.config import validate_telegram_config
 
@@ -129,6 +129,7 @@ def run_noninteractive_setup(
             allow_adherence_rebuild=allow_adherence_rebuild,
             default_subject=default_subject,
             default_location=default_location,
+            reminders=TelegramReminderConfig(timezone=timezone),
         ),
     )
     validate_telegram_config(config)

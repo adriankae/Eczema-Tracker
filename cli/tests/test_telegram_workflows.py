@@ -49,6 +49,12 @@ class FakeClient:
         self.uploads.append((path, field_name, filename, content, content_type))
         return {"location": {"id": 2, "image": {"mime_type": "image/jpeg"}}}
 
+    def download_file(self, path):
+        self.requests.append(("DOWNLOAD", path, None))
+        if path == "/locations/2/image":
+            return b"image-bytes", "image/jpeg"
+        raise AssertionError(path)
+
 
 class FakeFile:
     async def download_as_bytearray(self):
@@ -70,6 +76,9 @@ class FakeMessage:
 
     async def reply_text(self, text, **kwargs):
         self.replies.append((text, kwargs.get("reply_markup")))
+
+    async def reply_photo(self, **kwargs):
+        self.replies.append((kwargs.get("caption"), kwargs.get("reply_markup"), kwargs.get("photo")))
 
 
 class FakeQuery:
@@ -169,9 +178,11 @@ def test_heal_flow_lists_selects_and_confirms():
     ctx, client, update = make_ctx()
     query = callback(ctx, update, "menu:heal")
     assert "heal" in query.edits[0][0]
-    assert "Episode 10" in query.edits[0][1].inline_keyboard[0][0].text
+    assert query.edits[0][1].inline_keyboard[0][0].text == "Left elbow"
     query = callback(ctx, update, "heal:select:10")
-    assert "Heal episode 10" in query.edits[0][0]
+    assert query.edits == []
+    assert "Mark Left elbow as healed" in query.message.replies[0][0]
+    assert query.message.replies[0][2] == b"image-bytes"
     query = callback(ctx, update, "heal:confirm:10")
     assert "Healed episode 10" in query.edits[0][0]
     assert ("POST", "/episodes/10/heal", None) in client.requests
@@ -181,9 +192,11 @@ def test_relapse_flow_lists_healed_episode_and_confirms():
     ctx, client, update = make_ctx()
     query = callback(ctx, update, "menu:relapse")
     assert "relapse" in query.edits[0][0]
-    assert "Episode 11" in query.edits[0][1].inline_keyboard[0][0].text
+    assert query.edits[0][1].inline_keyboard[0][0].text == "Left elbow"
     query = callback(ctx, update, "relapse:select:11")
-    assert "Relapse episode 11" in query.edits[0][0]
+    assert query.edits == []
+    assert "Mark Left elbow as relapsed" in query.message.replies[0][0]
+    assert query.message.replies[0][2] == b"image-bytes"
     query = callback(ctx, update, "relapse:confirm:11")
     assert "Relapsed episode 11" in query.edits[0][0]
     assert ("POST", "/episodes/11/relapse", {"reason": "relapse"}) in client.requests

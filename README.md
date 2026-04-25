@@ -317,8 +317,11 @@ Setup notes:
 - Config remains under `~/.config/czm/config.toml` or `$XDG_CONFIG_HOME/czm/config.toml`.
 - Writes are enabled by default for allowlisted chats/users.
 - Adherence rebuild remains disabled by default and must be explicitly enabled.
+- Morning and evening reminders are enabled by default for newly created Telegram configs.
 
-The primary Telegram UX is button-driven. `/start` and `/menu` show:
+The primary Telegram UX is button-driven. Zema registers a Telegram command menu at runtime, shows inline menus on `/start` and `/menu`, and uses a persistent reply keyboard in private chats so common actions stay tappable without remembering slash commands. Group chats keep the quieter inline menu behavior.
+
+The menu includes:
 
 ```text
 [Start episode]   [Log treatment]
@@ -338,6 +341,28 @@ Guided workflows include:
 - Relapse episode.
 - View adherence summary, calendar, and missed days.
 - Rebuild adherence snapshots when `allow_adherence_rebuild=true`.
+
+Reminder behavior:
+
+- `zema telegram run` schedules reminders in the Telegram runtime, not in `zema-be`.
+- Morning reminders default to `07:00`; evening reminders default to `19:00`.
+- Reminder times use `telegram.reminders.timezone`, falling back to the CLI timezone.
+- Reminders use `/episodes/due` as the backend source of truth.
+- Reminder prompts include location images from `GET /locations/{location_id}/image` when configured and available.
+- Reminder prompts include `Log application` only when `allow_writes=true`.
+- `Snooze` suppresses repeat Telegram reminders in memory for the configured snooze duration; it does not change backend due state and resets on bot restart.
+
+Reminder config commands:
+
+```bash
+zema telegram config reminders show
+zema telegram config reminders enable
+zema telegram config reminders disable
+zema telegram config reminders set-morning 07:00
+zema telegram config reminders set-evening 19:00
+zema telegram config reminders set-snooze 30
+zema telegram config reminders images true
+```
 
 Typed slash commands remain available for power users:
 
@@ -378,6 +403,7 @@ Telegram security:
 Telegram limitations:
 
 - Conversation state is in-memory and resets on bot restart.
+- Reminder snooze state is in-memory and resets on bot restart.
 - Webhook mode is not implemented.
 - There is no LLM or natural-language mode.
 - There is no arbitrary CLI passthrough.
@@ -597,6 +623,11 @@ ZEMA_TELEGRAM_ALLOWED_CHAT_IDS
 ZEMA_TELEGRAM_ALLOWED_USER_IDS
 ZEMA_TELEGRAM_ALLOW_WRITES
 ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD
+ZEMA_TELEGRAM_REMINDERS_ENABLED
+ZEMA_TELEGRAM_REMINDER_MORNING_TIME
+ZEMA_TELEGRAM_REMINDER_EVENING_TIME
+ZEMA_TELEGRAM_REMINDER_SNOOZE_MINUTES
+ZEMA_TELEGRAM_REMINDER_SEND_IMAGES
 ```
 
 CLI config file locations:
@@ -622,6 +653,14 @@ allow_adherence_rebuild = false
 default_subject = ""
 default_location = ""
 command_mode = "buttons"
+
+[telegram.reminders]
+enabled = true
+morning_time = "07:00"
+evening_time = "19:00"
+timezone = "Europe/Berlin"
+send_location_images = true
+snooze_minutes = 30
 ```
 
 Telegram setup/config and typed slash-command runtime:
@@ -631,6 +670,7 @@ zema setup telegram --help
 zema telegram status
 zema telegram test
 zema telegram config show
+zema telegram config reminders show
 zema telegram run
 zema config show
 ```

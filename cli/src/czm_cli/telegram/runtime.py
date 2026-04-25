@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from telegram import BotCommand
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from czm_cli.client import CzmClient
@@ -11,8 +12,9 @@ from czm_cli.errors import CzmError, EXIT_AUTH
 from czm_cli.telegram.commands import TelegramCommandContext, handle_text_command
 from czm_cli.telegram.config import validate_telegram_config
 from czm_cli.telegram.formatting import backend_error_message
-from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text, handle_location_image_set_text, handle_photo
-from czm_cli.telegram.keyboards import main_menu_keyboard
+from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_location_image_set_text, handle_photo, handle_text_message
+from czm_cli.telegram.keyboards import main_menu_keyboard, main_menu_reply_keyboard
+from czm_cli.telegram.reminders import SnoozeStore, schedule_reminders
 from czm_cli.telegram.security import ensure_allowed, identity_from_update
 from czm_cli.telegram.setup import validate_bot_token
 from czm_cli.telegram.state import ConversationStore
@@ -52,14 +54,38 @@ class TelegramRuntime:
 def build_application(runtime: TelegramRuntime) -> Application:
     if runtime.state is None:
         runtime.state = ConversationStore()
-    application = Application.builder().token(runtime.config.telegram.bot_token or "").build()
-    handler_ctx = TelegramHandlerContext(TelegramCommandContext(runtime.config, runtime.client), runtime.state)
+    async def post_init(application: Application) -> None:
+        await register_command_menu(application)
+
+    application = Application.builder().token(runtime.config.telegram.bot_token or "").post_init(post_init).build()
+    handler_ctx = TelegramHandlerContext(
+        TelegramCommandContext(runtime.config, runtime.client),
+        runtime.state,
+        SnoozeStore(runtime.config.telegram.reminders.snooze_minutes),
+    )
     for command in TELEGRAM_COMMANDS:
         application.add_handler(CommandHandler(command, _handler(runtime, handler_ctx)))
     application.add_handler(CallbackQueryHandler(lambda update, context: handle_callback(update, context, handler_ctx)))
     application.add_handler(MessageHandler(filters.PHOTO, lambda update, context: handle_photo(update, context, handler_ctx)))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_guided_text(update, context, handler_ctx)))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lambda update, context: handle_text_message(update, context, handler_ctx)))
+    schedule_reminders(application, handler_ctx)
     return application
+
+
+async def register_command_menu(application: Application) -> None:
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "Open Zema"),
+            BotCommand("menu", "Show the Zema menu"),
+            BotCommand("help", "Show command help"),
+            BotCommand("status", "Check backend status"),
+            BotCommand("due", "Show treatments due now"),
+            BotCommand("adherence", "Show adherence summary"),
+            BotCommand("subjects", "List subjects"),
+            BotCommand("locations", "List locations"),
+            BotCommand("episodes", "List episodes"),
+        ]
+    )
 
 
 def run_polling(config: AppConfig) -> None:
@@ -85,7 +111,9 @@ def _handler(runtime: TelegramRuntime, handler_ctx: TelegramHandlerContext):
             text = getattr(message, "text", "") or ""
             if text.split(maxsplit=1)[0].split("@", 1)[0] in {"/start", "/menu"}:
                 menu_reply = await handle_text_command(TelegramCommandContext(runtime.config, runtime.client), text)
-                await message.reply_text(menu_reply, reply_markup=main_menu_keyboard())
+                chat = getattr(update, "effective_chat", None)
+                keyboard = main_menu_reply_keyboard() if getattr(chat, "type", None) == "private" else main_menu_keyboard()
+                await message.reply_text(menu_reply, reply_markup=keyboard)
                 return
             if text.split(maxsplit=1)[0].split("@", 1)[0] == "/location_image_set":
                 await message.reply_text(await handle_location_image_set_text(update, context, handler_ctx))

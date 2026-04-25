@@ -18,12 +18,14 @@ from czm_cli.telegram.keyboards import (
     location_image_prompt_keyboard,
     locations_keyboard,
     main_menu_keyboard,
+    main_menu_reply_keyboard,
     start_confirm_keyboard,
     start_image_keyboard,
     start_location_keyboard,
     start_subject_keyboard,
     subjects_keyboard,
 )
+from czm_cli.telegram.reminders import SnoozeStore
 from czm_cli.telegram.security import ensure_allowed, ensure_rebuild_allowed, ensure_writes_allowed, identity_from_update
 from czm_cli.telegram.state import ConversationStore, EXPIRED_STATE_MESSAGE
 from czm_cli.time_utils import local_today
@@ -33,6 +35,7 @@ from czm_cli.time_utils import local_today
 class TelegramHandlerContext:
     command_context: TelegramCommandContext
     state: ConversationStore
+    snoozes: SnoozeStore | None = None
 
 
 async def send_menu(message) -> None:
@@ -44,6 +47,10 @@ async def handle_callback(update, context, handler_ctx: TelegramHandlerContext) 
     await _maybe_await(query.answer())
     try:
         ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
+        if (query.data or "").startswith(("heal:select:", "relapse:select:")):
+            ensure_writes_allowed(handler_ctx.command_context.config.telegram)
+            await _send_episode_action_confirmation(update, context, handler_ctx, query.data or "")
+            return
         text, keyboard = _dispatch_callback(query.data or "", handler_ctx, update)
     except CzmError as exc:
         text, keyboard = (exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)), None
@@ -55,9 +62,19 @@ async def handle_callback(update, context, handler_ctx: TelegramHandlerContext) 
 def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -> tuple[str, object | None]:
     config = handler_ctx.command_context.config
     client = handler_ctx.command_context.client
+    if data == "menu:open":
+        return formatting.menu_text(), main_menu_keyboard()
     if data == "menu:due" or data == "menu:log_treatment":
         payload = client.get("/episodes/due")
         return formatting.format_due(payload), due_keyboard(payload.get("due", []), allow_writes=config.telegram.allow_writes)
+    if data.startswith("rem:snooze:"):
+        episode_id = int(data.rsplit(":", 1)[1])
+        identity = identity_from_update(update)
+        if identity.chat_id is None:
+            raise CzmError("Telegram chat identity is missing", exit_code=EXIT_AUTH)
+        if handler_ctx.snoozes is not None:
+            handler_ctx.snoozes.snooze(identity.chat_id, episode_id)
+        return f"Snoozed episode {episode_id}.", main_menu_keyboard()
     if data.startswith("due:log:"):
         ensure_writes_allowed(config.telegram)
         episode_id = int(data.rsplit(":", 1)[1])
@@ -232,6 +249,8 @@ def _start_episode_confirm_step(flow: dict) -> tuple[str, object | None]:
 
 def _episode_action_list(handler_ctx: TelegramHandlerContext, action: str) -> tuple[str, object | None]:
     episodes = handler_ctx.command_context.client.get("/episodes").get("episodes", [])
+    subjects = handler_ctx.command_context.client.get("/subjects").get("subjects", [])
+    locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
     if action == "heal":
         eligible = [episode for episode in episodes if episode.get("status") != "obsolete" and not episode.get("healed_at") and not episode.get("obsolete_at")]
         title = "Choose an episode to heal."
@@ -241,6 +260,7 @@ def _episode_action_list(handler_ctx: TelegramHandlerContext, action: str) -> tu
         title = "Choose an episode to relapse."
     if not eligible:
         return f"No episodes available to {action}.", None
+    eligible = _with_episode_labels(eligible, subjects, locations)
     return title, episode_select_keyboard(action, eligible)
 
 
@@ -327,6 +347,34 @@ async def handle_guided_text(update, context, handler_ctx: TelegramHandlerContex
         return True
 
 
+async def handle_text_message(update, context, handler_ctx: TelegramHandlerContext) -> None:
+    message = update.effective_message
+    text = (getattr(message, "text", "") or "").strip()
+    mapping = {
+        "Start episode": "menu:start_episode",
+        "Log treatment": "menu:log_treatment",
+        "Due today": "menu:due",
+        "Adherence": "menu:adherence",
+        "Heal episode": "menu:heal",
+        "Relapse episode": "menu:relapse",
+        "Locations": "menu:locations",
+        "Subjects": "menu:subjects",
+    }
+    if text in mapping:
+        try:
+            ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
+            reply, keyboard = _dispatch_callback(mapping[text], handler_ctx, update)
+        except CzmError as exc:
+            reply, keyboard = (exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)), None
+        except Exception:
+            reply, keyboard = "Zema request failed.", None
+        await message.reply_text(reply, reply_markup=keyboard or _reply_keyboard_for_update(update))
+        return
+    handled = await handle_guided_text(update, context, handler_ctx)
+    if handled:
+        return
+
+
 async def handle_location_image_set_text(update, context, handler_ctx: TelegramHandlerContext) -> str:
     del context
     identity = identity_from_update(update)
@@ -411,6 +459,67 @@ def _find_by_id(items: list[dict], item_id: int) -> dict:
         if item.get("id") == item_id:
             return item
     return {"id": item_id}
+
+
+def _with_episode_labels(episodes: list[dict], subjects: list[dict], locations: list[dict]) -> list[dict]:
+    subject_names = {item.get("id"): item.get("display_name") for item in subjects}
+    location_names = {item.get("id"): item.get("display_name") for item in locations}
+    location_counts: dict[int, int] = {}
+    for episode in episodes:
+        location_id = episode.get("location_id")
+        location_counts[location_id] = location_counts.get(location_id, 0) + 1
+    labels_seen: dict[str, int] = {}
+    enriched = []
+    for episode in episodes:
+        copied = dict(episode)
+        location_name = location_names.get(episode.get("location_id")) or f"Location {episode.get('location_id')}"
+        subject_name = subject_names.get(episode.get("subject_id")) or f"Subject {episode.get('subject_id')}"
+        label = location_name
+        if location_counts.get(episode.get("location_id"), 0) > 1:
+            label = f"{location_name} — {subject_name}"
+        labels_seen[label] = labels_seen.get(label, 0) + 1
+        if labels_seen[label] > 1:
+            label = f"{label} · phase {episode.get('current_phase_number')} · #{episode.get('id')}"
+        copied["telegram_label"] = label
+        copied["telegram_location_name"] = location_name
+        copied["telegram_subject_name"] = subject_name
+        enriched.append(copied)
+    return enriched
+
+
+async def _send_episode_action_confirmation(update, context, handler_ctx: TelegramHandlerContext, data: str) -> None:
+    action = data.split(":", 1)[0]
+    episode_id = int(data.rsplit(":", 1)[1])
+    episodes = handler_ctx.command_context.client.get("/episodes").get("episodes", [])
+    subjects = handler_ctx.command_context.client.get("/subjects").get("subjects", [])
+    locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
+    episode = _find_by_id(_with_episode_labels(episodes, subjects, locations), episode_id)
+    location_name = episode.get("telegram_location_name") or f"location {episode.get('location_id')}"
+    verb = "healed" if action == "heal" else "relapsed"
+    text = f"Mark {location_name} as {verb}?"
+    keyboard = confirm_episode_action_keyboard(action, episode_id)
+    image = _safe_location_image(handler_ctx, episode.get("location_id"))
+    query = update.callback_query
+    if image is not None and hasattr(query.message, "reply_photo"):
+        await query.message.reply_photo(photo=image[0], caption=text, reply_markup=keyboard)
+        return
+    await _edit_or_reply(query, text, keyboard)
+
+
+def _safe_location_image(handler_ctx: TelegramHandlerContext, location_id) -> tuple[bytes, str | None] | None:
+    if location_id is None:
+        return None
+    try:
+        return handler_ctx.command_context.client.download_file(f"/locations/{int(location_id)}/image")
+    except Exception:
+        return None
+
+
+def _reply_keyboard_for_update(update):
+    chat = getattr(update, "effective_chat", None)
+    if getattr(chat, "type", None) == "private":
+        return main_menu_reply_keyboard()
+    return main_menu_keyboard()
 
 
 def _resolve_location_id(handler_ctx: TelegramHandlerContext, reference: str) -> int:

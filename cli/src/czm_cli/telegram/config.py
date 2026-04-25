@@ -9,7 +9,9 @@ from czm_cli.config import (
     apply_env_overrides,
     load_app_config,
     normalize_base_url,
+    parse_hhmm,
     render_app_config,
+    validate_timezone_name,
     write_app_config,
 )
 from czm_cli.errors import ConfigError
@@ -34,6 +36,12 @@ def validate_telegram_config(config: AppConfig) -> None:
         raise ConfigError("telegram.allowed_chat_ids must contain at least one chat id")
     if config.telegram.command_mode != "buttons":
         raise ConfigError('telegram.command_mode must be "buttons"')
+    parse_hhmm(config.telegram.reminders.morning_time, label="telegram.reminders.morning_time")
+    parse_hhmm(config.telegram.reminders.evening_time, label="telegram.reminders.evening_time")
+    reminder_timezone = config.telegram.reminders.timezone or config.timezone
+    validate_timezone_name(reminder_timezone, label="telegram.reminders.timezone")
+    if config.telegram.reminders.snooze_minutes < 1:
+        raise ConfigError("telegram.reminders.snooze_minutes must be a positive integer")
 
 
 def telegram_status_lines(config: AppConfig) -> list[str]:
@@ -53,6 +61,12 @@ def telegram_status_lines(config: AppConfig) -> list[str]:
         f"default_subject: {config.telegram.default_subject or 'none'}",
         f"default_location: {config.telegram.default_location or 'none'}",
         f"command_mode: {config.telegram.command_mode}",
+        f"reminders_enabled: {str(config.telegram.reminders.enabled).lower()}",
+        f"reminder_morning_time: {config.telegram.reminders.morning_time}",
+        f"reminder_evening_time: {config.telegram.reminders.evening_time}",
+        f"reminder_timezone: {config.telegram.reminders.timezone or config.timezone}",
+        f"reminder_send_location_images: {str(config.telegram.reminders.send_location_images).lower()}",
+        f"reminder_snooze_minutes: {config.telegram.reminders.snooze_minutes}",
     ]
 
 
@@ -65,4 +79,3 @@ def update_telegram_config(path: Path, telegram: TelegramConfig, *, base: AppCon
     config.telegram = telegram
     write_app_config(path, config, overwrite=True)
     return config
-

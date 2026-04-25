@@ -104,6 +104,12 @@ zema telegram config add-user 987654321
 zema telegram config remove-user 987654321
 zema telegram config allow-writes true
 zema telegram config allow-adherence-rebuild false
+zema telegram config reminders show
+zema telegram config reminders enable
+zema telegram config reminders set-morning 07:00
+zema telegram config reminders set-evening 19:00
+zema telegram config reminders set-snooze 30
+zema telegram config reminders images true
 ```
 
 Run the long-polling Telegram runtime:
@@ -122,6 +128,11 @@ ZEMA_TELEGRAM_ALLOWED_CHAT_IDS
 ZEMA_TELEGRAM_ALLOWED_USER_IDS
 ZEMA_TELEGRAM_ALLOW_WRITES
 ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD
+ZEMA_TELEGRAM_REMINDERS_ENABLED
+ZEMA_TELEGRAM_REMINDER_MORNING_TIME
+ZEMA_TELEGRAM_REMINDER_EVENING_TIME
+ZEMA_TELEGRAM_REMINDER_SNOOZE_MINUTES
+ZEMA_TELEGRAM_REMINDER_SEND_IMAGES
 ```
 
 Docker mode:
@@ -131,7 +142,7 @@ docker compose --profile telegram up -d zema-telegram
 docker compose logs -f zema-telegram
 ```
 
-`/start` and `/menu` show a button menu for common workflows:
+`zema telegram run` registers Telegram bot commands. `/start` and `/menu` show a button menu for common workflows, and private chats also receive a persistent reply keyboard:
 
 ```text
 Start episode
@@ -145,6 +156,15 @@ Subjects
 ```
 
 Button-guided workflows support starting episodes, creating subjects/locations, setting location images from Telegram photos, logging due treatments, healing/relapsing episodes with confirmation, adherence views, and adherence rebuild when explicitly enabled.
+
+Reminder behavior:
+
+- Morning reminders default to `07:00`.
+- Evening reminders default to `19:00`.
+- Reminder times use `telegram.reminders.timezone`, falling back to the CLI timezone.
+- Reminders use backend `/episodes/due`; the Telegram runtime does not duplicate due logic.
+- Location images are fetched through `GET /locations/{location_id}/image` when enabled and available.
+- Snooze state is in-memory and resets when the Telegram runtime restarts.
 
 Typed slash-command fallback:
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -14,10 +14,29 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def main_menu_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            [KeyboardButton("Start episode"), KeyboardButton("Log treatment")],
+            [KeyboardButton("Due today"), KeyboardButton("Adherence")],
+            [KeyboardButton("Heal episode"), KeyboardButton("Relapse episode")],
+            [KeyboardButton("Locations"), KeyboardButton("Subjects")],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+def open_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Open menu", callback_data="menu:open")]])
+
+
 def due_keyboard(due_items: list[dict], *, allow_writes: bool) -> InlineKeyboardMarkup | None:
+    rows = []
     if not allow_writes:
-        return None
+        return open_menu_keyboard()
     rows = [[InlineKeyboardButton(f"Log episode {item['episode_id']}", callback_data=f"due:log:{item['episode_id']}")] for item in due_items[:10]]
+    rows.append([InlineKeyboardButton("Open menu", callback_data="menu:open")])
     return InlineKeyboardMarkup(rows) if rows else None
 
 
@@ -90,7 +109,7 @@ def episode_select_keyboard(prefix: str, episodes: list[dict]) -> InlineKeyboard
     rows = [
         [
             InlineKeyboardButton(
-                f"Episode {episode['id']} · {episode.get('status', 'unknown')}",
+                episode.get("telegram_label") or f"Episode {episode['id']} · {episode.get('status', 'unknown')}",
                 callback_data=f"{prefix}:select:{episode['id']}",
             )
         ]

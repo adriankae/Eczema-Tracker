@@ -13,7 +13,12 @@
 - Added Telegram chat/user allowlist configuration.
 - Added Telegram write-permission controls.
 - Added Telegram-specific environment variable loading while preserving existing `CZM_*` variables.
-- Added `python-telegram-bot` as a CLI dependency.
+- Added `python-telegram-bot` with JobQueue support as a CLI dependency.
+- Added always-available Telegram command/menu UX with private-chat persistent reply keyboard support.
+- Added configurable morning and evening Telegram treatment reminders.
+- Added reminder prompts with optional location images, quick log buttons, snooze, and open-menu actions.
+- Added Telegram reminder config commands and environment variable overrides.
+- Added location-image confirmation prompts for heal and relapse workflows.
 
 ### Security
 
@@ -21,12 +26,14 @@
 - Added masked secret display for Telegram config.
 - Added allowlisted Telegram command/button dispatch instead of arbitrary shell execution.
 - Added confirmation flows for state-changing episode actions.
+- Reminder delivery is restricted to configured allowed chats and respects Telegram write-permission settings.
 
 ### Notes
 
 - Telegram runtime runs outside the backend API container.
 - Backend remains the source of truth.
 - No LLM integration is required for Telegram bot usage.
+- Telegram reminders use `/episodes/due`; snooze state is in-memory and resets on bot restart.
 - Existing `zema setup`, `czm` compatibility, `CZM_*` variables, and `~/.config/czm/config.toml` remain supported.
 
 ## 0.2.0

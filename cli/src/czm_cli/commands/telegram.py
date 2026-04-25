@@ -9,7 +9,10 @@ from ..config import (
     apply_env_overrides,
     load_app_config,
     parse_bool,
+    parse_hhmm,
+    parse_positive_int,
     render_app_config,
+    validate_timezone_name,
     write_app_config,
     xdg_config_path,
 )
@@ -68,6 +71,34 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser], pa
     allow_rebuild = config_subparsers.add_parser("allow-adherence-rebuild", parents=[parent], help="Enable or disable Telegram adherence rebuild")
     allow_rebuild.add_argument("value")
     allow_rebuild.set_defaults(handler=handle_allow_adherence_rebuild)
+
+    reminders = config_subparsers.add_parser("reminders", parents=[parent], help="Inspect and edit Telegram reminders")
+    reminders_subparsers = reminders.add_subparsers(dest="telegram_reminders_command", required=True)
+
+    reminders_show = reminders_subparsers.add_parser("show", parents=[parent], help="Show reminder config")
+    reminders_show.set_defaults(handler=handle_reminders_show)
+
+    reminders_enable = reminders_subparsers.add_parser("enable", parents=[parent], help="Enable reminders")
+    reminders_enable.set_defaults(handler=handle_reminders_enable)
+
+    reminders_disable = reminders_subparsers.add_parser("disable", parents=[parent], help="Disable reminders")
+    reminders_disable.set_defaults(handler=handle_reminders_disable)
+
+    reminders_morning = reminders_subparsers.add_parser("set-morning", parents=[parent], help="Set morning reminder time")
+    reminders_morning.add_argument("time")
+    reminders_morning.set_defaults(handler=handle_reminders_set_morning)
+
+    reminders_evening = reminders_subparsers.add_parser("set-evening", parents=[parent], help="Set evening reminder time")
+    reminders_evening.add_argument("time")
+    reminders_evening.set_defaults(handler=handle_reminders_set_evening)
+
+    reminders_snooze = reminders_subparsers.add_parser("set-snooze", parents=[parent], help="Set reminder snooze minutes")
+    reminders_snooze.add_argument("minutes")
+    reminders_snooze.set_defaults(handler=handle_reminders_set_snooze)
+
+    reminders_images = reminders_subparsers.add_parser("images", parents=[parent], help="Enable or disable reminder images")
+    reminders_images.add_argument("value")
+    reminders_images.set_defaults(handler=handle_reminders_images)
 
 
 def _path(args) -> Path:
@@ -195,4 +226,80 @@ def handle_allow_adherence_rebuild(ctx, args) -> int:
         {"status": "ok", "allow_adherence_rebuild": config.telegram.allow_adherence_rebuild},
         f"allow_adherence_rebuild: {str(config.telegram.allow_adherence_rebuild).lower()}",
     )
+    return 0
+
+
+def _reminder_lines(config) -> list[str]:
+    reminder_timezone = config.telegram.reminders.timezone or config.timezone
+    return [
+        f"enabled: {str(config.telegram.reminders.enabled).lower()}",
+        f"morning_time: {config.telegram.reminders.morning_time}",
+        f"evening_time: {config.telegram.reminders.evening_time}",
+        f"timezone: {reminder_timezone}",
+        f"send_location_images: {str(config.telegram.reminders.send_location_images).lower()}",
+        f"snooze_minutes: {config.telegram.reminders.snooze_minutes}",
+    ]
+
+
+def handle_reminders_show(ctx, args) -> int:
+    config = apply_env_overrides(_load(_path(args)))
+    _emit(args, {"reminders": _reminder_lines(config)}, "\n".join(_reminder_lines(config)))
+    return 0
+
+
+def handle_reminders_enable(ctx, args) -> int:
+    path = _path(args)
+    config = _load(path)
+    config.telegram.reminders.enabled = True
+    _save(path, config)
+    _emit(args, {"status": "ok", "enabled": True}, "reminders_enabled: true")
+    return 0
+
+
+def handle_reminders_disable(ctx, args) -> int:
+    path = _path(args)
+    config = _load(path)
+    config.telegram.reminders.enabled = False
+    _save(path, config)
+    _emit(args, {"status": "ok", "enabled": False}, "reminders_enabled: false")
+    return 0
+
+
+def handle_reminders_set_morning(ctx, args) -> int:
+    path = _path(args)
+    config = _load(path)
+    parse_hhmm(args.time, label="morning reminder time")
+    config.telegram.reminders.morning_time = args.time
+    _save(path, config)
+    _emit(args, {"status": "ok", "morning_time": args.time}, f"morning_time: {args.time}")
+    return 0
+
+
+def handle_reminders_set_evening(ctx, args) -> int:
+    path = _path(args)
+    config = _load(path)
+    parse_hhmm(args.time, label="evening reminder time")
+    config.telegram.reminders.evening_time = args.time
+    _save(path, config)
+    _emit(args, {"status": "ok", "evening_time": args.time}, f"evening_time: {args.time}")
+    return 0
+
+
+def handle_reminders_set_snooze(ctx, args) -> int:
+    path = _path(args)
+    config = _load(path)
+    minutes = parse_positive_int(args.minutes, label="snooze minutes")
+    config.telegram.reminders.snooze_minutes = minutes
+    _save(path, config)
+    _emit(args, {"status": "ok", "snooze_minutes": minutes}, f"snooze_minutes: {minutes}")
+    return 0
+
+
+def handle_reminders_images(ctx, args) -> int:
+    path = _path(args)
+    config = _load(path)
+    enabled = parse_bool(args.value, label="reminder images")
+    config.telegram.reminders.send_location_images = enabled
+    _save(path, config)
+    _emit(args, {"status": "ok", "send_location_images": enabled}, f"send_location_images: {str(enabled).lower()}")
     return 0

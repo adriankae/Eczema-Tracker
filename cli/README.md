@@ -147,6 +147,7 @@ zema setup telegram \
 zema telegram status
 zema telegram test
 zema telegram config show
+zema telegram config reminders show
 zema telegram run
 ```
 
@@ -160,9 +161,28 @@ ZEMA_TELEGRAM_ALLOWED_CHAT_IDS
 ZEMA_TELEGRAM_ALLOWED_USER_IDS
 ZEMA_TELEGRAM_ALLOW_WRITES
 ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD
+ZEMA_TELEGRAM_REMINDERS_ENABLED
+ZEMA_TELEGRAM_REMINDER_MORNING_TIME
+ZEMA_TELEGRAM_REMINDER_EVENING_TIME
+ZEMA_TELEGRAM_REMINDER_SNOOZE_MINUTES
+ZEMA_TELEGRAM_REMINDER_SEND_IMAGES
 ```
 
-The primary Telegram UX is button-driven. `/start` and `/menu` show buttons for starting episodes, logging treatments, checking due items, adherence, healing/relapsing episodes, locations, and subjects.
+The primary Telegram UX is button-driven. `zema telegram run` registers Telegram bot commands, `/start` and `/menu` show inline buttons, and private chats also get a persistent reply keyboard for starting episodes, logging treatments, checking due items, adherence, healing/relapsing episodes, locations, and subjects.
+
+Reminder commands:
+
+```bash
+zema telegram config reminders show
+zema telegram config reminders enable
+zema telegram config reminders disable
+zema telegram config reminders set-morning 07:00
+zema telegram config reminders set-evening 19:00
+zema telegram config reminders set-snooze 30
+zema telegram config reminders images true
+```
+
+The Telegram runtime schedules morning and evening reminders using the backend `/episodes/due` source of truth. Reminder prompts can include location images, `Log application`, `Snooze`, and `Open menu`. Snooze state is in-memory and resets on bot restart.
 
 Supported typed fallback commands:
 
@@ -201,6 +221,7 @@ Guided workflows include:
 - Heal or relapse an episode after confirmation.
 - View adherence summary/calendar/missed days.
 - Rebuild adherence snapshots when explicitly enabled.
+- Receive morning/evening due reminders with optional location images.
 
 Security defaults:
 
