@@ -4,7 +4,7 @@ import asyncio
 
 from czm_cli.config import AppConfig, TelegramConfig
 from czm_cli.telegram.commands import TelegramCommandContext
-from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text
+from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text, handle_text_message
 from czm_cli.telegram.runtime import TelegramRuntime, build_application
 from czm_cli.telegram.state import ConversationStore
 
@@ -139,6 +139,37 @@ def test_log_treatment_uses_location_first_due_prompts():
     assert query.edits[0][0] == "Due prompts below."
     assert "Left elbow" in query.message.replies[0][0]
     assert "Episode 12" not in query.message.replies[0][0]
+
+
+def test_reply_keyboard_due_today_uses_location_first_due_prompts():
+    ctx, client, _update = make_handler(allow_writes=True)
+    message = FakeMessage("Due today")
+    update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
+    run(handle_text_message(update, None, ctx))
+    assert message.replies[0][0] == "Due prompts below."
+    assert "Left elbow" in message.replies[1][0]
+    assert "Subject: Child A" in message.replies[1][0]
+    assert "Episode 12" not in message.replies[1][0]
+    assert message.replies[1][2] == b"image-bytes"
+    assert ("DOWNLOAD", "/locations/2/image", None) in client.requests
+
+
+def test_reply_keyboard_log_treatment_reuses_due_prompts():
+    ctx, _client, _update = make_handler(allow_writes=True)
+    message = FakeMessage("Log treatment")
+    update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
+    run(handle_text_message(update, None, ctx))
+    assert message.replies[0][0] == "Due prompts below."
+    assert "Left elbow" in message.replies[1][0]
+    assert "Episode 12" not in message.replies[1][0]
+
+
+def test_reply_keyboard_due_today_empty_state():
+    ctx, _client, _update = make_handler(allow_empty=True)
+    message = FakeMessage("Due today")
+    update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
+    run(handle_text_message(update, None, ctx))
+    assert message.replies[0][0] == "No treatments are due right now."
 
 
 def test_due_callback_empty_state():

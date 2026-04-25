@@ -30,6 +30,14 @@ def test_episode_lifecycle(client, auth_headers):
     relapsed = relapse.json()["episode"]
     assert relapsed["current_phase_number"] == 1
     assert relapsed["status"] == "active_flare"
+    assert relapsed["healed_at"] is None
+
+    heal_again = client.post(f"/episodes/{episode['id']}/heal", headers=auth_headers, json={"healed_at": "2026-04-07T18:00:00Z"})
+    assert heal_again.status_code == 200
+    healed_again = heal_again.json()["episode"]
+    assert healed_again["current_phase_number"] == 2
+    assert healed_again["status"] == "in_taper"
+    assert healed_again["healed_at"] is not None
 
 
 def test_auto_advance_and_obsolete(client, auth_headers):

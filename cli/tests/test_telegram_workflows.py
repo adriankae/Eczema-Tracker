@@ -21,13 +21,19 @@ class FakeClient:
         if path == "/subjects":
             return {"subjects": [{"id": 1, "display_name": "Child A"}]}
         if path == "/locations":
-            return {"locations": [{"id": 2, "code": "left_elbow", "display_name": "Left elbow", "image": None}]}
+            return {
+                "locations": [
+                    {"id": 2, "code": "left_elbow", "display_name": "Left elbow", "image": None},
+                    {"id": 5, "code": "right_cheekbone", "display_name": "Right cheekbone", "image": None},
+                ]
+            }
         if path == "/episodes":
             return {
                 "episodes": [
                     {"id": 10, "subject_id": 1, "location_id": 2, "status": "active_flare", "current_phase_number": 1, "healed_at": None, "obsolete_at": None},
                     {"id": 11, "subject_id": 1, "location_id": 2, "status": "in_taper", "current_phase_number": 2, "healed_at": "2026-04-01T00:00:00Z", "obsolete_at": None},
                     {"id": 12, "subject_id": 1, "location_id": 2, "status": "obsolete", "current_phase_number": 2, "healed_at": None, "obsolete_at": "2026-04-01T00:00:00Z"},
+                    {"id": 13, "subject_id": 1, "location_id": 5, "status": "active_flare", "current_phase_number": 1, "healed_at": None, "obsolete_at": None},
                 ]
             }
         raise AssertionError(path)
@@ -42,6 +48,8 @@ class FakeClient:
             return {"episode": {"id": 20, "subject_id": json["subject_id"], "location_id": json["location_id"], "status": "active_flare"}}
         if path == "/episodes/10/heal":
             return {"episode": {"id": 10, "status": "in_taper"}}
+        if path == "/episodes/13/heal":
+            return {"episode": {"id": 13, "status": "in_taper"}}
         if path == "/episodes/11/relapse":
             return {"episode": {"id": 11, "status": "active_flare"}}
         if path == "/adherence/rebuild":
@@ -55,6 +63,8 @@ class FakeClient:
     def download_file(self, path):
         self.requests.append(("DOWNLOAD", path, None))
         if path == "/locations/2/image":
+            return b"image-bytes", "image/jpeg"
+        if path == "/locations/5/image":
             return b"image-bytes", "image/jpeg"
         raise AssertionError(path)
 
@@ -200,6 +210,19 @@ def test_heal_flow_lists_selects_and_confirms():
     query = callback(ctx, update, "heal:confirm:10", query=FakeQuery("heal:confirm:10", message=FakeMessage(photo=[object()], caption="Mark Left elbow as healed?")))
     assert "Healed episode 10" in query.caption_edits[0][0]
     assert ("POST", "/episodes/10/heal", None) in client.requests
+
+
+def test_relapsed_active_flare_episode_appears_in_heal_flow():
+    ctx, client, update = make_ctx()
+    query = callback(ctx, update, "menu:heal")
+    callbacks = [button.callback_data for row in query.edits[0][1].inline_keyboard for button in row]
+    assert "heal:select:13" in callbacks
+
+    query = callback(ctx, update, "heal:select:13")
+    assert "Mark Right cheekbone as healed" in query.message.replies[0][0]
+    query = callback(ctx, update, "heal:confirm:13", query=FakeQuery("heal:confirm:13", message=FakeMessage(text="Mark Right cheekbone as healed?")))
+    assert "Healed episode 13" in query.edits[0][0]
+    assert ("POST", "/episodes/13/heal", None) in client.requests
 
 
 def test_relapse_flow_lists_healed_episode_and_confirms():

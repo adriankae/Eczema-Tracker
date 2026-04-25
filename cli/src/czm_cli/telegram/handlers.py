@@ -14,7 +14,6 @@ from czm_cli.telegram.keyboards import (
     adherence_rebuild_range_keyboard,
     adherence_keyboard,
     confirm_episode_action_keyboard,
-    due_keyboard,
     due_prompt_keyboard,
     episode_select_keyboard,
     location_actions_keyboard,
@@ -70,9 +69,6 @@ def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -
     client = handler_ctx.command_context.client
     if data == "menu:open":
         return formatting.menu_text(), main_menu_keyboard()
-    if data == "menu:due" or data == "menu:log_treatment":
-        payload = client.get("/episodes/due")
-        return formatting.format_due(payload), due_keyboard(payload.get("due", []), allow_writes=config.telegram.allow_writes)
     if data.startswith("rem:snooze:"):
         episode_id = int(data.rsplit(":", 1)[1])
         identity = identity_from_update(update)
@@ -260,7 +256,7 @@ def _episode_action_list(handler_ctx: TelegramHandlerContext, action: str) -> tu
     subjects = handler_ctx.command_context.client.get("/subjects").get("subjects", [])
     locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
     if action == "heal":
-        eligible = [episode for episode in episodes if episode.get("status") != "obsolete" and not episode.get("healed_at") and not episode.get("obsolete_at")]
+        eligible = [episode for episode in episodes if episode.get("status") not in {"obsolete", "in_taper"} and not episode.get("obsolete_at")]
         title = "Choose an episode to heal."
     else:
         healed = [episode for episode in episodes if episode.get("healed_at") and not episode.get("obsolete_at")]
@@ -291,6 +287,7 @@ def _handle_episode_action_callback(data: str, handler_ctx: TelegramHandlerConte
 async def _send_due_prompts(update, context, handler_ctx: TelegramHandlerContext) -> None:
     del context
     query = update.callback_query
+    message = query.message
     due_items = _enriched_due_items(handler_ctx)
     if not due_items:
         await safe_edit_callback_message(query, "No treatments are due right now.", reply_markup=main_menu_keyboard())
@@ -298,16 +295,33 @@ async def _send_due_prompts(update, context, handler_ctx: TelegramHandlerContext
     limit = formatting.MAX_ROWS
     shown = due_items[:limit]
     await safe_edit_callback_message(query, "Due prompts below.", reply_markup=main_menu_keyboard())
-    for item in shown:
+    await _send_due_prompt_messages(message, handler_ctx, shown)
+    if len(due_items) > limit:
+        await message.reply_text(f"Showing {limit} of {len(due_items)} due items.", reply_markup=main_menu_keyboard())
+
+
+async def _send_due_prompts_from_message(message, handler_ctx: TelegramHandlerContext) -> None:
+    due_items = _enriched_due_items(handler_ctx)
+    if not due_items:
+        await message.reply_text("No treatments are due right now.", reply_markup=main_menu_keyboard())
+        return
+    limit = formatting.MAX_ROWS
+    shown = due_items[:limit]
+    await message.reply_text("Due prompts below.", reply_markup=main_menu_keyboard())
+    await _send_due_prompt_messages(message, handler_ctx, shown)
+    if len(due_items) > limit:
+        await message.reply_text(f"Showing {limit} of {len(due_items)} due items.", reply_markup=main_menu_keyboard())
+
+
+async def _send_due_prompt_messages(message, handler_ctx: TelegramHandlerContext, due_items: list[dict]) -> None:
+    for item in due_items:
         text = _format_due_prompt(item)
         keyboard = due_prompt_keyboard(int(item["episode_id"]), allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
         image = _safe_location_image(handler_ctx, item.get("location_id"))
-        if image is not None and hasattr(query.message, "reply_photo"):
-            await query.message.reply_photo(photo=image[0], caption=text, reply_markup=keyboard)
+        if image is not None and hasattr(message, "reply_photo"):
+            await message.reply_photo(photo=image[0], caption=text, reply_markup=keyboard)
         else:
-            await query.message.reply_text(text, reply_markup=keyboard)
-    if len(due_items) > limit:
-        await query.message.reply_text(f"Showing {limit} of {len(due_items)} due items.", reply_markup=main_menu_keyboard())
+            await message.reply_text(text, reply_markup=keyboard)
 
 
 def _format_due_prompt(item: dict) -> str:
@@ -447,6 +461,9 @@ async def handle_text_message(update, context, handler_ctx: TelegramHandlerConte
     if text in mapping:
         try:
             ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
+            if text in {"Due today", "Log treatment"}:
+                await _send_due_prompts_from_message(message, handler_ctx)
+                return
             reply, keyboard = _dispatch_callback(mapping[text], handler_ctx, update)
         except CzmError as exc:
             reply, keyboard = (exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)), None

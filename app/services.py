@@ -337,6 +337,7 @@ def relapse_episode(db: Session, account: Account, episode_id: int, reported_at:
     close_current_phase_history(db, episode, reported_at)
     episode.status = "active_flare"
     episode.current_phase_number = 1
+    episode.healed_at = None
     episode.phase_started_at = reported_at
     episode.phase_due_end_at = None
     episode.updated_at = reported_at
