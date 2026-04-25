@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import timedelta
 import shlex
 
+from telegram.error import BadRequest
+
 from czm_cli.errors import CzmError, EXIT_AUTH, EXIT_USAGE
 from czm_cli.telegram import formatting
 from czm_cli.telegram.commands import TelegramCommandContext
@@ -56,7 +58,7 @@ async def handle_callback(update, context, handler_ctx: TelegramHandlerContext) 
         text, keyboard = (exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)), None
     except Exception:
         text, keyboard = "Zema request failed.", None
-    await _edit_or_reply(query, text, keyboard)
+    await safe_edit_callback_message(query, text, reply_markup=keyboard)
 
 
 def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -> tuple[str, object | None]:
@@ -503,7 +505,7 @@ async def _send_episode_action_confirmation(update, context, handler_ctx: Telegr
     if image is not None and hasattr(query.message, "reply_photo"):
         await query.message.reply_photo(photo=image[0], caption=text, reply_markup=keyboard)
         return
-    await _edit_or_reply(query, text, keyboard)
+    await safe_edit_callback_message(query, text, reply_markup=keyboard)
 
 
 def _safe_location_image(handler_ctx: TelegramHandlerContext, location_id) -> tuple[bytes, str | None] | None:
@@ -550,11 +552,32 @@ def _resolve_location_id(handler_ctx: TelegramHandlerContext, reference: str) ->
     raise CzmError(f"location reference is ambiguous: {reference}", exit_code=EXIT_USAGE)
 
 
-async def _edit_or_reply(query, text: str, keyboard) -> None:
+async def safe_edit_callback_message(query, text: str, reply_markup=None) -> None:
+    message = getattr(query, "message", None)
+    if _is_caption_message(message) and hasattr(query, "edit_message_caption"):
+        try:
+            await query.edit_message_caption(caption=text, reply_markup=reply_markup)
+            return
+        except BadRequest as exc:
+            if "There is no caption in the message to edit" not in str(exc):
+                raise
     if hasattr(query, "edit_message_text"):
-        await query.edit_message_text(text, reply_markup=keyboard)
-    else:
-        await query.message.reply_text(text, reply_markup=keyboard)
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup)
+            return
+        except BadRequest as exc:
+            if "There is no text in the message to edit" not in str(exc):
+                raise
+    if message is not None:
+        await message.reply_text(text, reply_markup=reply_markup)
+
+
+def _is_caption_message(message) -> bool:
+    if message is None:
+        return False
+    if getattr(message, "caption", None) is not None:
+        return True
+    return bool(getattr(message, "photo", None) or getattr(message, "document", None))
 
 
 async def _maybe_await(value):

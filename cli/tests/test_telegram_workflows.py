@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+from telegram.error import BadRequest
+
 from czm_cli.config import AppConfig, TelegramConfig
 from czm_cli.telegram.commands import TelegramCommandContext
-from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text, handle_photo
+from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text, handle_photo, safe_edit_callback_message
 from czm_cli.telegram.state import ConversationStore
 
 
@@ -69,9 +72,10 @@ class FakePhoto:
 
 
 class FakeMessage:
-    def __init__(self, text="", photo=None):
+    def __init__(self, text="", photo=None, caption=None):
         self.text = text
         self.photo = photo or []
+        self.caption = caption
         self.replies = []
 
     async def reply_text(self, text, **kwargs):
@@ -82,16 +86,26 @@ class FakeMessage:
 
 
 class FakeQuery:
-    def __init__(self, data):
+    def __init__(self, data, *, message=None, text_error=None, caption_error=None):
         self.data = data
         self.edits = []
-        self.message = FakeMessage()
+        self.caption_edits = []
+        self.message = message or FakeMessage()
+        self.text_error = text_error
+        self.caption_error = caption_error
 
     async def answer(self):
         return None
 
     async def edit_message_text(self, text, **kwargs):
+        if self.text_error is not None:
+            raise BadRequest(self.text_error)
         self.edits.append((text, kwargs.get("reply_markup")))
+
+    async def edit_message_caption(self, caption, **kwargs):
+        if self.caption_error is not None:
+            raise BadRequest(self.caption_error)
+        self.caption_edits.append((caption, kwargs.get("reply_markup")))
 
 
 class Obj:
@@ -119,8 +133,8 @@ def make_ctx(*, allow_writes=True, allow_rebuild=False, chat_id=123, user_id=1):
     return ctx, client, update
 
 
-def callback(ctx, update, data):
-    query = FakeQuery(data)
+def callback(ctx, update, data, *, query=None):
+    query = query or FakeQuery(data)
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     return query
@@ -183,8 +197,8 @@ def test_heal_flow_lists_selects_and_confirms():
     assert query.edits == []
     assert "Mark Left elbow as healed" in query.message.replies[0][0]
     assert query.message.replies[0][2] == b"image-bytes"
-    query = callback(ctx, update, "heal:confirm:10")
-    assert "Healed episode 10" in query.edits[0][0]
+    query = callback(ctx, update, "heal:confirm:10", query=FakeQuery("heal:confirm:10", message=FakeMessage(photo=[object()], caption="Mark Left elbow as healed?")))
+    assert "Healed episode 10" in query.caption_edits[0][0]
     assert ("POST", "/episodes/10/heal", None) in client.requests
 
 
@@ -197,9 +211,43 @@ def test_relapse_flow_lists_healed_episode_and_confirms():
     assert query.edits == []
     assert "Mark Left elbow as relapsed" in query.message.replies[0][0]
     assert query.message.replies[0][2] == b"image-bytes"
-    query = callback(ctx, update, "relapse:confirm:11")
-    assert "Relapsed episode 11" in query.edits[0][0]
+    query = callback(ctx, update, "relapse:confirm:11", query=FakeQuery("relapse:confirm:11", message=FakeMessage(photo=[object()], caption="Mark Left elbow as relapsed?")))
+    assert "Relapsed episode 11" in query.caption_edits[0][0]
     assert ("POST", "/episodes/11/relapse", {"reason": "relapse"}) in client.requests
+
+
+def test_photo_confirmation_cancel_edits_caption_for_heal_and_relapse():
+    ctx, _client, update = make_ctx()
+    heal_query = callback(ctx, update, "heal:cancel", query=FakeQuery("heal:cancel", message=FakeMessage(photo=[object()], caption="Mark Left elbow as healed?")))
+    assert "Heal cancelled" in heal_query.caption_edits[0][0]
+
+    relapse_query = callback(ctx, update, "relapse:cancel", query=FakeQuery("relapse:cancel", message=FakeMessage(photo=[object()], caption="Mark Left elbow as relapsed?")))
+    assert "Relapse cancelled" in relapse_query.caption_edits[0][0]
+
+
+def test_text_only_confirmation_still_edits_text():
+    ctx, client, update = make_ctx()
+    query = callback(ctx, update, "heal:confirm:10", query=FakeQuery("heal:confirm:10", message=FakeMessage(text="Heal episode 10?")))
+    assert "Healed episode 10" in query.edits[0][0]
+    assert query.caption_edits == []
+    assert ("POST", "/episodes/10/heal", None) in client.requests
+
+
+def test_photo_confirmation_falls_back_to_reply_when_text_edit_rejected():
+    query = FakeQuery(
+        "heal:confirm:10",
+        message=FakeMessage(photo=[object()]),
+        caption_error="There is no caption in the message to edit",
+        text_error="There is no text in the message to edit",
+    )
+    run(safe_edit_callback_message(query, "Healed episode 10."))
+    assert query.message.replies[0][0] == "Healed episode 10."
+
+
+def test_unrelated_bad_request_is_not_swallowed():
+    query = FakeQuery("heal:confirm:10", message=FakeMessage(text="Heal episode 10?"), text_error="message is not modified")
+    with pytest.raises(BadRequest):
+        run(safe_edit_callback_message(query, "Healed episode 10."))
 
 
 def test_adherence_rebuild_button_hidden_when_disabled_and_confirmed_when_enabled():
