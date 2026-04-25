@@ -146,7 +146,7 @@ class EpisodeListResponse(BaseModel):
 class ApplicationCreateRequest(BaseModel):
     episode_id: int
     applied_at: datetime | None = None
-    treatment_type: str
+    treatment_type: str | None = None
     treatment_name: str | None = None
     quantity_text: str | None = None
     notes: str | None = None

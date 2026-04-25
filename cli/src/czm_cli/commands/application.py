@@ -15,7 +15,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser], pa
     log = application_subparsers.add_parser("log", parents=[parent], help="Log an application")
     log.add_argument("--episode", required=True)
     log.add_argument("--applied-at")
-    log.add_argument("--treatment-type", required=True)
+    log.add_argument("--treatment-type")
     log.add_argument("--treatment-name")
     log.add_argument("--quantity-text")
     log.add_argument("--notes")
@@ -44,8 +44,9 @@ def handle_log(ctx, args) -> int:
     episode_id = require_int(args.episode, "episode")
     json_payload = {
         "episode_id": episode_id,
-        "treatment_type": args.treatment_type,
     }
+    if args.treatment_type is not None:
+        json_payload["treatment_type"] = args.treatment_type
     if args.applied_at:
         json_payload["applied_at"] = parse_local_datetime(args.applied_at, ctx.config.timezone).isoformat().replace("+00:00", "Z")
     if args.treatment_name is not None:

@@ -11,6 +11,20 @@ def _episode(client, headers):
 
 def test_application_crud_and_due(client, auth_headers):
     episode_id = _episode(client, auth_headers)
+    minimal = client.post(
+        "/applications",
+        headers=auth_headers,
+        json={
+            "episode_id": episode_id,
+            "applied_at": "2026-04-06T06:30:00Z",
+        },
+    )
+    assert minimal.status_code == 201
+    assert minimal.json()["application"]["treatment_type"] == "other"
+    assert minimal.json()["application"]["treatment_name"] is None
+    assert minimal.json()["application"]["quantity_text"] is None
+    assert minimal.json()["application"]["notes"] is None
+
     created = client.post(
         "/applications",
         headers=auth_headers,

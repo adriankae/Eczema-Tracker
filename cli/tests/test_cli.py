@@ -285,3 +285,46 @@ def test_episode_relapse_help_text_marks_reason_optional(capsys):
     out = capsys.readouterr().out
     assert "--reason" in out
     assert "Optional human-readable relapse reason" in out
+
+
+def test_application_log_allows_minimal_payload(monkeypatch):
+    fake = FakeClient(
+        {
+            ("POST", "/applications"): {
+                "application": {
+                    "id": 1,
+                    "episode_id": 7,
+                    "applied_at": "2026-04-15T20:30:00Z",
+                    "treatment_type": "other",
+                    "treatment_name": None,
+                    "quantity_text": None,
+                    "phase_number_snapshot": 1,
+                    "is_voided": False,
+                    "voided_at": None,
+                    "is_deleted": False,
+                    "deleted_at": None,
+                    "notes": None,
+                    "created_at": "2026-04-15T20:30:00Z",
+                }
+            }
+        }
+    )
+    monkeypatch.setattr(cli_module, "CzmClient", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(cli_module, "resolve_runtime_config", lambda **kwargs: DummyConfig())
+
+    exit_code = cli_module.main(
+        [
+            "--json",
+            "--base-url",
+            "http://example",
+            "--api-key",
+            "k",
+            "application",
+            "log",
+            "--episode",
+            "7",
+        ]
+    )
+
+    assert exit_code == 0
+    assert fake.requests[-1] == ("POST", "/applications", {"episode_id": 7})

@@ -278,7 +278,7 @@ Arguments:
 
 - `--episode` episode ID
 - `--applied-at` optional local timestamp
-- `--treatment-type` one of `steroid`, `emollient`, or `other`
+- `--treatment-type` optional; one of `steroid`, `emollient`, or `other`; defaults to `other`
 - `--treatment-name` optional product name
 - `--quantity-text` optional amount text
 - `--notes` optional note

@@ -81,7 +81,7 @@ zema episode relapse 1 --reason symptoms_returned --reported-at 2026-04-15T21:00
 
 ## Applications
 
-`zema application log --episode <episode> --treatment-type <type> [--applied-at <local-timestamp>] [--treatment-name <name>] [--quantity-text <text>] [--notes <text>]`
+`zema application log --episode <episode> [--treatment-type <type>] [--applied-at <local-timestamp>] [--treatment-name <name>] [--quantity-text <text>] [--notes <text>]`
 
 `zema application update <application> [--applied-at <local-timestamp>] [--treatment-type <type>] [--treatment-name <name>] [--quantity-text <text>] [--notes <text>]`
 
@@ -94,6 +94,8 @@ Example:
 ```bash
 zema application log --episode 1 --treatment-type steroid --treatment-name "Hydrocortisone 1%" --quantity-text "thin layer"
 ```
+
+For quick habit/adherence logging, only `--episode` is required. If omitted, `--treatment-type` is stored as `other`.
 
 ## Due and Events
 

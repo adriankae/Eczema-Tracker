@@ -449,14 +449,15 @@ def log_application(
     account: Account,
     episode_id: int,
     applied_at: datetime,
-    treatment_type: str,
+    treatment_type: str | None,
     treatment_name: str | None,
     quantity_text: str | None,
     notes: str | None,
     actor_type: str,
     actor_id: str,
 ) -> TreatmentApplication:
-    if treatment_type not in VALID_TREATMENT_TYPES:
+    normalized_treatment_type = treatment_type or "other"
+    if normalized_treatment_type not in VALID_TREATMENT_TYPES:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid treatment type")
     episode = get_episode(db, account, episode_id)
     if episode.status == "obsolete":
@@ -464,7 +465,7 @@ def log_application(
     application = TreatmentApplication(
         episode_id=episode.id,
         applied_at=applied_at,
-        treatment_type=treatment_type,
+        treatment_type=normalized_treatment_type,
         treatment_name=treatment_name,
         quantity_text=quantity_text,
         phase_number_snapshot=episode.current_phase_number,
@@ -482,7 +483,7 @@ def log_application(
         payload={
             "application_id": application.id,
             "applied_at": applied_at.isoformat(),
-            "treatment_type": treatment_type,
+            "treatment_type": normalized_treatment_type,
             "phase_number_snapshot": episode.current_phase_number,
             "treatment_name": treatment_name,
             "quantity_text": quantity_text,

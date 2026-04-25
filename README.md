@@ -594,11 +594,11 @@ Logs a treatment application for an episode.
 Mandatory fields:
 
 - `episode_id`
-- `treatment_type`
 
 Optional fields:
 
 - `applied_at` defaults to now
+- `treatment_type` defaults to `other`; allowed values are `steroid`, `emollient`, and `other`
 - `treatment_name`
 - `quantity_text`
 - `notes`
