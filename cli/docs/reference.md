@@ -108,11 +108,13 @@ Arguments:
 
 - `--code` machine-friendly unique code
 - `--display-name` human-readable label
+- `--image` optional path to a JPEG, PNG, or WebP image to upload after creation
 
 Example:
 
 ```bash
 czm location create --code left_elbow --display-name "Left elbow"
+czm location create --code left_elbow --display-name "Left elbow" --image ./left-elbow.jpg
 ```
 
 Example output:
@@ -121,6 +123,7 @@ Example output:
 id            1
 code          left_elbow
 display_name  Left elbow
+image         no
 ```
 
 ## `czm location list`
@@ -137,7 +140,32 @@ Example output:
 
 ```text
 Locations:
-- 1: left_elbow (Left elbow)
+- 1: left_elbow (Left elbow, image=no)
+```
+
+## `zema location image set`
+
+Add or replace the optional image for a body location.
+
+```bash
+zema location image set left_elbow ./left-elbow.jpg
+zema location image set 1 ./left-elbow.jpg
+```
+
+## `zema location image get`
+
+Download a body location image to a local file.
+
+```bash
+zema location image get left_elbow --output ./left-elbow.jpg
+```
+
+## `zema location image remove`
+
+Remove the optional image from a body location.
+
+```bash
+zema location image remove left_elbow
 ```
 
 ## `czm episode create`

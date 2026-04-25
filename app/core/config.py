@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     enable_scheduler: bool = True
     initial_username: str = "admin"
     initial_password: str = "admin"
+    location_image_dir: str = "./location-images"
+    location_image_max_bytes: int = 5 * 1024 * 1024
 
 
 @lru_cache(maxsize=1)

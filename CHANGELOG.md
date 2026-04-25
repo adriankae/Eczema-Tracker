@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.4
+
+### Added
+
+- Added optional zero-or-one image support for body locations.
+- Added filesystem-backed location image storage with database metadata.
+- Added location image upload, download, and delete API endpoints.
+- Added `zema location create --image` and `zema location image set|get|remove` CLI workflows.
+- Added Docker Compose storage configuration and a backend-only named volume for location images.
+
+### Changed
+
+- Location responses now include nullable image metadata when an image is present.
+
+### Notes
+
+- Existing location records without images remain valid.
+- The CLI still talks to the backend over HTTP and never writes directly into backend image storage.
+- No multi-image galleries, thumbnails, image transformations, HEIC support, or object storage were added in this release.
+
 ## 0.1.3
 
 ### Added

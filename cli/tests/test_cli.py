@@ -42,6 +42,20 @@ class FakeClient:
             raise response
         return response
 
+    def upload_file(self, path, *, field_name, file_path, content_type=None):
+        self.requests.append(("UPLOAD", path, field_name, str(file_path), content_type))
+        response = self.responses[("UPLOAD", path)]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def download_file(self, path):
+        self.requests.append(("DOWNLOAD", path))
+        response = self.responses[("DOWNLOAD", path)]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
     def close(self):
         pass
 
@@ -328,3 +342,188 @@ def test_application_log_allows_minimal_payload(monkeypatch):
 
     assert exit_code == 0
     assert fake.requests[-1] == ("POST", "/applications", {"episode_id": 7})
+
+
+def _location_payload(image: dict | None = None) -> dict:
+    return {"location": {"id": 3, "code": "left_elbow", "display_name": "Left elbow", "image": image}}
+
+
+def _image_payload() -> dict:
+    return {
+        "mime_type": "image/png",
+        "size_bytes": 24,
+        "sha256": "a" * 64,
+        "original_filename": "left-elbow.png",
+        "uploaded_at": "2026-04-25T10:00:00Z",
+        "url": "/locations/3/image",
+    }
+
+
+def test_location_create_with_image_uploads_after_create(monkeypatch, tmp_path, capsys):
+    image_path = tmp_path / "left-elbow.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    fake = FakeClient(
+        {
+            ("POST", "/locations"): _location_payload(),
+            ("UPLOAD", "/locations/3/image"): _location_payload(_image_payload()),
+        }
+    )
+    monkeypatch.setattr(cli_module, "CzmClient", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(cli_module, "resolve_runtime_config", lambda **kwargs: DummyConfig())
+
+    exit_code = cli_module.main(
+        [
+            "--json",
+            "--base-url",
+            "http://example",
+            "--api-key",
+            "k",
+            "location",
+            "create",
+            "--code",
+            "left_elbow",
+            "--display-name",
+            "Left elbow",
+            "--image",
+            str(image_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["location"]["image"]["mime_type"] == "image/png"
+    assert fake.requests == [
+        ("POST", "/locations", {"code": "left_elbow", "display_name": "Left elbow"}),
+        ("UPLOAD", "/locations/3/image", "image", str(image_path), "image/png"),
+    ]
+
+
+def test_location_image_set_resolves_and_uploads(monkeypatch, tmp_path):
+    image_path = tmp_path / "left-elbow.webp"
+    image_path.write_bytes(b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 12)
+    fake = FakeClient(
+        {
+            ("GET", "/locations"): {"locations": [{"id": 3, "code": "left_elbow", "display_name": "Left elbow"}]},
+            ("UPLOAD", "/locations/3/image"): _location_payload(_image_payload()),
+        }
+    )
+    monkeypatch.setattr(cli_module, "CzmClient", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(cli_module, "resolve_runtime_config", lambda **kwargs: DummyConfig())
+
+    exit_code = cli_module.main(
+        [
+            "--base-url",
+            "http://example",
+            "--api-key",
+            "k",
+            "location",
+            "image",
+            "set",
+            "left_elbow",
+            str(image_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert fake.requests[-1] == ("UPLOAD", "/locations/3/image", "image", str(image_path), "image/webp")
+
+
+def test_location_image_get_writes_output(monkeypatch, tmp_path, capsys):
+    output_path = tmp_path / "downloaded.png"
+    fake = FakeClient(
+        {
+            ("GET", "/locations"): {"locations": [{"id": 3, "code": "left_elbow", "display_name": "Left elbow"}]},
+            ("DOWNLOAD", "/locations/3/image"): (b"image-bytes", "image/png"),
+        }
+    )
+    monkeypatch.setattr(cli_module, "CzmClient", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(cli_module, "resolve_runtime_config", lambda **kwargs: DummyConfig())
+
+    exit_code = cli_module.main(
+        [
+            "--base-url",
+            "http://example",
+            "--api-key",
+            "k",
+            "location",
+            "image",
+            "get",
+            "left_elbow",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert output_path.read_bytes() == b"image-bytes"
+    assert "Wrote location image" in capsys.readouterr().out
+
+
+def test_location_image_get_rejects_json(monkeypatch, tmp_path):
+    fake = FakeClient({})
+    monkeypatch.setattr(cli_module, "CzmClient", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(cli_module, "resolve_runtime_config", lambda **kwargs: DummyConfig())
+
+    exit_code = cli_module.main(
+        [
+            "--json",
+            "location",
+            "image",
+            "get",
+            "left_elbow",
+            "--output",
+            str(tmp_path / "downloaded.png"),
+        ]
+    )
+
+    assert exit_code == EXIT_USAGE
+
+
+def test_location_image_remove_resolves_and_deletes(monkeypatch, capsys):
+    fake = FakeClient(
+        {
+            ("GET", "/locations"): {"locations": [{"id": 3, "code": "left_elbow", "display_name": "Left elbow"}]},
+            ("DELETE", "/locations/3/image"): _location_payload(None),
+        }
+    )
+    monkeypatch.setattr(cli_module, "CzmClient", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(cli_module, "resolve_runtime_config", lambda **kwargs: DummyConfig())
+
+    exit_code = cli_module.main(
+        [
+            "--json",
+            "--base-url",
+            "http://example",
+            "--api-key",
+            "k",
+            "location",
+            "image",
+            "remove",
+            "left_elbow",
+        ]
+    )
+
+    assert exit_code == 0
+    assert json.loads(capsys.readouterr().out)["location"]["image"] is None
+    assert fake.requests[-1] == ("DELETE", "/locations/3/image", None)
+
+
+def test_location_image_set_rejects_missing_file(monkeypatch):
+    fake = FakeClient(
+        {
+            ("GET", "/locations"): {"locations": [{"id": 3, "code": "left_elbow", "display_name": "Left elbow"}]},
+        }
+    )
+    monkeypatch.setattr(cli_module, "CzmClient", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(cli_module, "resolve_runtime_config", lambda **kwargs: DummyConfig())
+
+    exit_code = cli_module.main(
+        [
+            "location",
+            "image",
+            "set",
+            "left_elbow",
+            "/does/not/exist.png",
+        ]
+    )
+
+    assert exit_code == EXIT_USAGE

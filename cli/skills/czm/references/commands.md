@@ -48,14 +48,24 @@ zema subject get "Child A"
 
 ## Locations
 
-`zema location create --code <code> --display-name "<label>"`
+`zema location create --code <code> --display-name "<label>" [--image <path>]`
 
 `zema location list`
+
+`zema location image set <location> <path>`
+
+`zema location image get <location> --output <path>`
+
+`zema location image remove <location>`
 
 Examples:
 
 ```bash
 zema location create --code left_elbow --display-name "Left elbow"
+zema location create --code left_elbow --display-name "Left elbow" --image ./left-elbow.jpg
+zema location image set left_elbow ./left-elbow.jpg
+zema location image get left_elbow --output ./left-elbow.jpg
+zema location image remove left_elbow
 zema location list
 ```
 
@@ -136,6 +146,9 @@ The preferred executable is `zema`, but these `czm` compatibility aliases remain
 - `czm subject get`
 - `czm location create`
 - `czm location list`
+- `czm location image set`
+- `czm location image get`
+- `czm location image remove`
 - `czm episode create`
 - `czm episode list`
 - `czm episode get`

@@ -21,7 +21,9 @@ from app.core.security import hash_password
 
 
 @pytest.fixture(autouse=True)
-def reset_database():
+def reset_database(tmp_path):
+    settings.location_image_dir = str(tmp_path / "location-images")
+    settings.location_image_max_bytes = 5 * 1024 * 1024
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()

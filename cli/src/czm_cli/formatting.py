@@ -42,11 +42,13 @@ def format_subject_list(subjects: list[dict[str, Any]]) -> str:
 
 
 def format_location(location: dict[str, Any]) -> str:
+    image = _optional_value(location, "image")
     return _kv_lines(
         [
             ("id", str(_value(location, "id"))),
             ("code", str(_value(location, "code"))),
             ("display_name", str(_value(location, "display_name"))),
+            ("image", "yes" if image else "no"),
         ]
     )
 
@@ -56,8 +58,29 @@ def format_location_list(locations: list[dict[str, Any]]) -> str:
         return "No locations."
     lines = ["Locations:"]
     for location in locations:
-        lines.append(f"- {_value(location, 'id')}: {_value(location, 'code')} ({_value(location, 'display_name')})")
+        image_text = ", image=yes" if _optional_value(location, "image") else ", image=no"
+        lines.append(f"- {_value(location, 'id')}: {_value(location, 'code')} ({_value(location, 'display_name')}{image_text})")
     return "\n".join(lines)
+
+
+def format_location_image_result(payload: dict[str, Any]) -> str:
+    location = payload["location"] if isinstance(payload, dict) and "location" in payload else payload
+    image = _optional_value(location, "image")
+    if not image:
+        return format_location(location)
+    return _kv_lines(
+        [
+            ("id", str(_value(location, "id"))),
+            ("code", str(_value(location, "code"))),
+            ("display_name", str(_value(location, "display_name"))),
+            ("image_mime_type", str(_value(image, "mime_type"))),
+            ("image_size_bytes", str(_value(image, "size_bytes"))),
+            ("image_sha256", str(_value(image, "sha256"))),
+            ("image_original_filename", str(_optional_value(image, "original_filename"))),
+            ("image_uploaded_at", str(_value(image, "uploaded_at"))),
+            ("image_url", str(_value(image, "url"))),
+        ]
+    )
 
 
 def format_episode(episode: dict[str, Any], timezone_name: str = "UTC") -> str:

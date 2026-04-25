@@ -233,6 +233,7 @@ After the backend is running and the CLI has an API key:
 ```bash
 zema subject create --display-name "Child A"
 zema location create --code left_elbow --display-name "Left elbow"
+zema location image set left_elbow ./left-elbow.jpg
 zema episode create --subject "Child A" --location left_elbow
 zema application log --episode 1
 zema due list
@@ -244,7 +245,17 @@ Notes:
 - `zema application log --episode 1` records a minimal application.
 - If omitted, `treatment_type` defaults to `other`.
 - Optional application fields include `--applied-at`, `--treatment-type`, `--treatment-name`, `--quantity-text`, and `--notes`.
+- Location images are optional and can be added during creation or later with `zema location image set`.
 - Subject and location references may be numeric IDs or resolvable names/codes.
+
+Location image examples:
+
+```bash
+zema location create --code left_elbow --display-name "Left elbow" --image ./left-elbow.jpg
+zema location image set left_elbow ./left-elbow.jpg
+zema location image get left_elbow --output ./left-elbow.jpg
+zema location image remove left_elbow
+```
 
 ## Adherence Tracking
 
@@ -316,6 +327,9 @@ GET /subjects/{subject_id}
 
 POST /locations
 GET /locations
+POST /locations/{location_id}/image
+GET /locations/{location_id}/image
+DELETE /locations/{location_id}/image
 
 POST /episodes
 GET /episodes
@@ -384,6 +398,7 @@ Backend tests:
 
 ```bash
 python3 -m pytest tests
+python3 -m pytest tests/test_location_images.py
 python3 -m pytest tests/test_adherence.py
 python3 -m pytest tests/test_adherence_api.py
 ```
@@ -409,7 +424,7 @@ The `zema-be` Docker image runs this automatically on startup:
 alembic upgrade head && python -m app.server
 ```
 
-Current migrations include the initial schema and the `episode_daily_adherence` table.
+Current migrations include the initial schema, `episode_daily_adherence`, and location image metadata.
 
 ## Configuration
 
@@ -424,6 +439,8 @@ ENABLE_SCHEDULER
 JWT_SECRET
 INITIAL_USERNAME
 INITIAL_PASSWORD
+LOCATION_IMAGE_DIR
+LOCATION_IMAGE_MAX_BYTES
 ```
 
 Docker Compose defaults:
@@ -437,7 +454,11 @@ ENABLE_SCHEDULER=true
 JWT_SECRET=change-me-in-production
 INITIAL_USERNAME=admin
 INITIAL_PASSWORD=admin
+LOCATION_IMAGE_DIR=/data/location-images
+LOCATION_IMAGE_MAX_BYTES=5242880
 ```
+
+Location images are stored on the `zema-be` filesystem under `LOCATION_IMAGE_DIR`. Docker Compose mounts a named volume at `/data/location-images` so uploaded images survive container restarts.
 
 CLI environment variables:
 

@@ -76,6 +76,12 @@ class BodyLocation(Base):
     code: Mapped[str] = mapped_column(String(100), nullable=False)
     display_name: Mapped[str] = mapped_column(String(200), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    image_storage_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    image_mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    image_size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    image_original_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    image_uploaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     account: Mapped[Account] = relationship(back_populates="body_locations")
 

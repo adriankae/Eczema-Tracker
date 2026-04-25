@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.adherence import list_adherence_rows, persist_episode_adherence, rebuild_active_episode_adherence, summarize_adherence
+from app.location_images import get_location_image_file, remove_location_image, store_location_image
 from app.dependencies import ActorContext, get_current_actor
 from app.core.database import get_db
 from app.core.time import utc_now
@@ -41,6 +42,7 @@ from app.schemas import (
     LoginResponse,
     LocationCreateRequest,
     LocationCreateResponse,
+    LocationImageOut,
     LocationListResponse,
     LocationOut,
     RelapseEpisodeRequest,
@@ -91,7 +93,23 @@ def _application_response(application) -> ApplicationResponse:
 
 
 def _location_response(location) -> LocationOut:
-    return LocationOut.model_validate(location)
+    image = None
+    if location.image_storage_key is not None:
+        image = LocationImageOut(
+            mime_type=location.image_mime_type,
+            size_bytes=location.image_size_bytes,
+            sha256=location.image_sha256,
+            original_filename=location.image_original_filename,
+            uploaded_at=location.image_uploaded_at,
+            url=f"/locations/{location.id}/image",
+        )
+    return LocationOut(
+        id=location.id,
+        code=location.code,
+        display_name=location.display_name,
+        created_at=location.created_at,
+        image=image,
+    )
 
 
 def _subject_response(subject) -> SubjectOut:
@@ -221,6 +239,27 @@ def locations_create(payload: LocationCreateRequest, actor: ActorContext = Depen
 @router.get("/locations", response_model=LocationListResponse)
 def locations_list(actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
     return LocationListResponse(locations=[_location_response(location) for location in list_locations(db, actor.account)])
+
+
+@router.post("/locations/{location_id}/image", response_model=LocationCreateResponse)
+async def locations_image_upload(
+    location_id: int,
+    image: UploadFile = File(...),
+    actor: ActorContext = Depends(get_current_actor),
+    db: Session = Depends(get_db),
+):
+    return LocationCreateResponse(location=_location_response(await store_location_image(db, actor.account, location_id, image)))
+
+
+@router.get("/locations/{location_id}/image")
+def locations_image_get(location_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    stored = get_location_image_file(db, actor.account, location_id)
+    return FileResponse(stored.path, media_type=stored.mime_type)
+
+
+@router.delete("/locations/{location_id}/image", response_model=LocationCreateResponse)
+def locations_image_delete(location_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return LocationCreateResponse(location=_location_response(remove_location_image(db, actor.account, location_id)))
 
 
 @router.post("/episodes", response_model=EpisodeResponse, status_code=status.HTTP_201_CREATED)

@@ -33,6 +33,7 @@ class LocationOut(BaseModel):
     code: str
     display_name: str
     created_at: datetime | None = None
+    image: dict | None = None
 
     model_config = ConfigDict(extra="ignore")
 

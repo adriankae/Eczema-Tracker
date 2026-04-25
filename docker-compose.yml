@@ -26,11 +26,15 @@ services:
       JWT_SECRET: change-me-in-production
       INITIAL_USERNAME: admin
       INITIAL_PASSWORD: admin
+      LOCATION_IMAGE_DIR: /data/location-images
+      LOCATION_IMAGE_MAX_BYTES: 5242880
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "28173:28173"
+    volumes:
+      - zema-location-images:/data/location-images
 
   zema-cli:
     build:
@@ -44,3 +48,6 @@ services:
       - zema-be
     profiles:
       - cli
+
+volumes:
+  zema-location-images:

@@ -82,11 +82,21 @@ class LocationCreateRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=200)
 
 
+class LocationImageOut(BaseModel):
+    mime_type: str
+    size_bytes: int
+    sha256: str
+    original_filename: str | None
+    uploaded_at: datetime
+    url: str
+
+
 class LocationOut(BaseModel):
     id: int
     code: str
     display_name: str
     created_at: datetime
+    image: LocationImageOut | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

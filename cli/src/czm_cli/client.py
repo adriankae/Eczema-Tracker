@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -17,7 +18,6 @@ class CzmClient:
             transport=transport,
             headers={
                 "Accept": "application/json",
-                "Content-Type": "application/json",
                 "X-API-Key": api_key,
             },
         )
@@ -35,6 +35,15 @@ class CzmClient:
         if response.content:
             return response.json()
         return None
+
+    def request_bytes(self, method: str, path: str, *, params: Mapping[str, Any] | None = None) -> tuple[bytes, str | None]:
+        try:
+            response = self._client.request(method, path, params=params)
+        except httpx.HTTPError as exc:
+            raise TransportError(f"request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise self._map_http_error(response)
+        return response.content, response.headers.get("content-type")
 
     def _map_http_error(self, response: httpx.Response) -> ApiError:
         message = f"request failed with status {response.status_code}"
@@ -65,9 +74,24 @@ class CzmClient:
     def post(self, path: str, *, json: Mapping[str, Any] | None = None, params: Mapping[str, Any] | None = None) -> Any:
         return self.request("POST", path, json=json, params=params)
 
+    def upload_file(self, path: str, *, field_name: str, file_path: Path, content_type: str | None = None) -> Any:
+        with file_path.open("rb") as handle:
+            files = {field_name: (file_path.name, handle, content_type or "application/octet-stream")}
+            try:
+                response = self._client.post(path, files=files)
+            except httpx.HTTPError as exc:
+                raise TransportError(f"request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise self._map_http_error(response)
+        if response.content:
+            return response.json()
+        return None
+
     def patch(self, path: str, *, json: Mapping[str, Any] | None = None, params: Mapping[str, Any] | None = None) -> Any:
         return self.request("PATCH", path, json=json, params=params)
 
     def delete(self, path: str, *, json: Mapping[str, Any] | None = None, params: Mapping[str, Any] | None = None) -> Any:
         return self.request("DELETE", path, json=json, params=params)
 
+    def download_file(self, path: str) -> tuple[bytes, str | None]:
+        return self.request_bytes("GET", path)

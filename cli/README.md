@@ -77,6 +77,9 @@ Layout:
 - `zema subject get`
 - `zema location create`
 - `zema location list`
+- `zema location image set`
+- `zema location image get`
+- `zema location image remove`
 - `zema episode create`
 - `zema episode list`
 - `zema episode get`
