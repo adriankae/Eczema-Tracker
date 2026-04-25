@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- Added guided Telegram bot setup through `zema setup telegram`.
+- Added a Telegram bot runtime through `zema telegram run`.
+- Added Telegram configuration validation, status, and connection test commands.
+- Added a button-driven Telegram frontend for core Zema workflows.
+- Added guided Telegram workflows for starting episodes, creating locations, setting location images, healing/relapsing episodes, logging treatments, due items, and adherence.
+- Added Docker profile support for running Telegram separately from `zema-be`.
+- Added Telegram chat/user allowlist configuration.
+- Added Telegram write-permission controls.
+- Added Telegram-specific environment variable loading while preserving existing `CZM_*` variables.
+- Added `python-telegram-bot` as a CLI dependency.
+
+### Security
+
+- Added allowed-chat and optional allowed-user enforcement.
+- Added masked secret display for Telegram config.
+- Added allowlisted Telegram command/button dispatch instead of arbitrary shell execution.
+- Added confirmation flows for state-changing episode actions.
+
+### Notes
+
+- Telegram runtime runs outside the backend API container.
+- Backend remains the source of truth.
+- No LLM integration is required for Telegram bot usage.
+- Existing `zema setup`, `czm` compatibility, `CZM_*` variables, and `~/.config/czm/config.toml` remain supported.
+
 ## 0.2.0
 
 ### Added

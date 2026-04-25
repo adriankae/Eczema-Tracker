@@ -14,6 +14,24 @@ If you are just getting started, run `zema setup` first and then read [Getting S
 
 All examples prefer `zema`; replace it with `czm` if you need the compatibility alias.
 
+## `zema config`
+
+Inspect and edit the local CLI config at `~/.config/czm/config.toml` or `$XDG_CONFIG_HOME/czm/config.toml`.
+
+Examples:
+
+```bash
+zema config path
+zema config show
+zema config show --show-secrets
+zema config validate
+zema config set base_url http://localhost:28173
+zema config set api_key "$CZM_API_KEY"
+zema config set timezone Europe/Berlin
+```
+
+Secrets such as `api_key` and `telegram.bot_token` are masked unless `--show-secrets` is used.
+
 ## `czm setup`
 
 Create the local config file automatically by logging into the backend, creating an API key, and writing `config.toml`.
@@ -37,6 +55,131 @@ Output:
 Wrote config to ~/.config/czm/config.toml
 Next: run `czm subject list`
 ```
+
+## `zema setup telegram`
+
+Create or update Telegram bot configuration.
+
+Non-interactive example:
+
+```bash
+zema setup telegram \
+  --base-url http://localhost:28173 \
+  --api-key "$CZM_API_KEY" \
+  --bot-token "$ZEMA_TELEGRAM_BOT_TOKEN" \
+  --allowed-chat-id 123456789 \
+  --timezone Europe/Berlin \
+  --yes
+```
+
+Disable Telegram write commands during setup:
+
+```bash
+zema setup telegram \
+  --api-key "$CZM_API_KEY" \
+  --bot-token "$ZEMA_TELEGRAM_BOT_TOKEN" \
+  --allowed-chat-id 123456789 \
+  --no-allow-writes \
+  --yes
+```
+
+Telegram setup writes a `[telegram]` section with `bot_token`, `allowed_chat_ids`, optional `allowed_user_ids`, `allow_writes`, and `allow_adherence_rebuild`.
+
+## `zema telegram`
+
+Inspect and validate Telegram configuration.
+
+Examples:
+
+```bash
+zema telegram status
+zema telegram test
+zema telegram config show
+zema telegram config show --show-secrets
+zema telegram config validate
+zema telegram config set-token "$ZEMA_TELEGRAM_BOT_TOKEN"
+zema telegram config add-chat 123456789
+zema telegram config remove-chat 123456789
+zema telegram config add-user 987654321
+zema telegram config remove-user 987654321
+zema telegram config allow-writes true
+zema telegram config allow-adherence-rebuild false
+```
+
+Run the long-polling Telegram runtime:
+
+```bash
+zema telegram run
+```
+
+The runtime supports explicit typed slash commands. It does not support arbitrary `/zema ...` passthrough or shell execution.
+
+Telegram environment variables:
+
+```text
+ZEMA_TELEGRAM_BOT_TOKEN
+ZEMA_TELEGRAM_ALLOWED_CHAT_IDS
+ZEMA_TELEGRAM_ALLOWED_USER_IDS
+ZEMA_TELEGRAM_ALLOW_WRITES
+ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD
+```
+
+Docker mode:
+
+```bash
+docker compose --profile telegram up -d zema-telegram
+docker compose logs -f zema-telegram
+```
+
+`/start` and `/menu` show a button menu for common workflows:
+
+```text
+Start episode
+Log treatment
+Due today
+Adherence
+Heal episode
+Relapse episode
+Locations
+Subjects
+```
+
+Button-guided workflows support starting episodes, creating subjects/locations, setting location images from Telegram photos, logging due treatments, healing/relapsing episodes with confirmation, adherence views, and adherence rebuild when explicitly enabled.
+
+Typed slash-command fallback:
+
+```text
+/start
+/menu
+/help
+/status
+/subjects
+/subject_create Child A
+/locations
+/location_create left_elbow Left elbow
+/location_image_set left_elbow
+/episodes
+/episode 12
+/episode_create subject:"Child A" location:left_elbow
+/due
+/log episode:12
+/events episode:12
+/timeline episode:12
+/adherence 30
+/adherence_calendar episode:12 days:30
+/adherence_missed episode:12 days:30
+/adherence_rebuild episode:12 from:2026-04-01 to:2026-04-30
+```
+
+Security behavior:
+
+- Allowed chat IDs are required.
+- Optional allowed user IDs can further restrict access.
+- Unknown chats/users are rejected before backend calls.
+- Write commands require `allow_writes=true`.
+- Adherence rebuild requires `allow_adherence_rebuild=true`.
+- Secrets are masked in config display.
+- Conversation state is in-memory and resets on bot restart.
 
 ## `czm subject create`
 

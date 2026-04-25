@@ -30,6 +30,36 @@ Override if needed:
 zema setup --base-url http://localhost:28173 --username admin --password admin
 ```
 
+Telegram config foundation:
+
+```bash
+zema setup telegram --api-key "$CZM_API_KEY" --bot-token "$ZEMA_TELEGRAM_BOT_TOKEN" --allowed-chat-id 123456789 --yes
+zema telegram status
+zema telegram test
+zema telegram config show
+zema telegram run
+zema config show
+```
+
+Secrets are masked by default in config output.
+
+Telegram runtime:
+
+- Prefer `/start` or `/menu` for button-driven workflows.
+- Buttons support due items, quick treatment logging, subject/location workflows, location image photo upload, start episode, heal/relapse, and adherence.
+- Typed slash commands are fallback shortcuts.
+- The bot does not support arbitrary `/zema ...` passthrough or shell execution.
+
+Telegram environment variables:
+
+```text
+ZEMA_TELEGRAM_BOT_TOKEN
+ZEMA_TELEGRAM_ALLOWED_CHAT_IDS
+ZEMA_TELEGRAM_ALLOWED_USER_IDS
+ZEMA_TELEGRAM_ALLOW_WRITES
+ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD
+```
+
 ## Subjects
 
 `zema subject create --display-name "<name>"`

@@ -1,0 +1,454 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import timedelta
+import shlex
+
+from czm_cli.errors import CzmError, EXIT_AUTH, EXIT_USAGE
+from czm_cli.telegram import formatting
+from czm_cli.telegram.commands import TelegramCommandContext
+from czm_cli.telegram.keyboards import (
+    adherence_rebuild_confirm_keyboard,
+    adherence_rebuild_range_keyboard,
+    adherence_keyboard,
+    confirm_episode_action_keyboard,
+    due_keyboard,
+    episode_select_keyboard,
+    location_actions_keyboard,
+    location_image_prompt_keyboard,
+    locations_keyboard,
+    main_menu_keyboard,
+    start_confirm_keyboard,
+    start_image_keyboard,
+    start_location_keyboard,
+    start_subject_keyboard,
+    subjects_keyboard,
+)
+from czm_cli.telegram.security import ensure_allowed, ensure_rebuild_allowed, ensure_writes_allowed, identity_from_update
+from czm_cli.telegram.state import ConversationStore, EXPIRED_STATE_MESSAGE
+from czm_cli.time_utils import local_today
+
+
+@dataclass(slots=True)
+class TelegramHandlerContext:
+    command_context: TelegramCommandContext
+    state: ConversationStore
+
+
+async def send_menu(message) -> None:
+    await message.reply_text(formatting.menu_text(), reply_markup=main_menu_keyboard())
+
+
+async def handle_callback(update, context, handler_ctx: TelegramHandlerContext) -> None:
+    query = update.callback_query
+    await _maybe_await(query.answer())
+    try:
+        ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
+        text, keyboard = _dispatch_callback(query.data or "", handler_ctx, update)
+    except CzmError as exc:
+        text, keyboard = (exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)), None
+    except Exception:
+        text, keyboard = "Zema request failed.", None
+    await _edit_or_reply(query, text, keyboard)
+
+
+def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -> tuple[str, object | None]:
+    config = handler_ctx.command_context.config
+    client = handler_ctx.command_context.client
+    if data == "menu:due" or data == "menu:log_treatment":
+        payload = client.get("/episodes/due")
+        return formatting.format_due(payload), due_keyboard(payload.get("due", []), allow_writes=config.telegram.allow_writes)
+    if data.startswith("due:log:"):
+        ensure_writes_allowed(config.telegram)
+        episode_id = int(data.rsplit(":", 1)[1])
+        return formatting.format_application_logged(client.post("/applications", json={"episode_id": episode_id})), None
+    if data == "menu:subjects":
+        return formatting.format_subjects(client.get("/subjects")), subjects_keyboard(allow_writes=config.telegram.allow_writes)
+    if data == "subject:create":
+        ensure_writes_allowed(config.telegram)
+        _set_state(update, handler_ctx, "create_subject")
+        return "Send the subject display name.", None
+    if data == "menu:locations":
+        payload = client.get("/locations")
+        return formatting.format_locations(payload), locations_keyboard(payload.get("locations", []), allow_writes=config.telegram.allow_writes)
+    if data == "loc:create":
+        ensure_writes_allowed(config.telegram)
+        _set_state(update, handler_ctx, "create_location_code")
+        return "Send the location code, for example left_elbow.", None
+    if data.startswith("loc:select:"):
+        location_id = int(data.rsplit(":", 1)[1])
+        return f"Location {location_id}", location_actions_keyboard(location_id, allow_writes=config.telegram.allow_writes)
+    if data.startswith("loc:image:"):
+        ensure_writes_allowed(config.telegram)
+        location_id = int(data.rsplit(":", 1)[1])
+        _set_state(update, handler_ctx, "waiting_location_photo", {"location_id": location_id})
+        return f"Send a photo for location {location_id}.", None
+    if data == "menu:adherence":
+        return "Choose adherence view:", adherence_keyboard(allow_rebuild=config.telegram.allow_adherence_rebuild)
+    if data.startswith("adh:"):
+        result = _handle_adherence_callback(data, handler_ctx)
+        return result if isinstance(result, tuple) else (result, None)
+    if data == "menu:start_episode":
+        ensure_writes_allowed(config.telegram)
+        return _start_episode_subject_step(handler_ctx, update)
+    if data.startswith("epstart:"):
+        ensure_writes_allowed(config.telegram)
+        return _handle_start_episode_callback(data, handler_ctx, update)
+    if data == "menu:heal":
+        ensure_writes_allowed(config.telegram)
+        return _episode_action_list(handler_ctx, "heal")
+    if data.startswith("heal:"):
+        ensure_writes_allowed(config.telegram)
+        return _handle_episode_action_callback(data, handler_ctx, "heal")
+    if data == "menu:relapse":
+        ensure_writes_allowed(config.telegram)
+        return _episode_action_list(handler_ctx, "relapse")
+    if data.startswith("relapse:"):
+        ensure_writes_allowed(config.telegram)
+        return _handle_episode_action_callback(data, handler_ctx, "relapse")
+    return "Unknown or stale button. Tap /menu to start again.", None
+
+
+def _handle_adherence_callback(data: str, handler_ctx: TelegramHandlerContext) -> str | tuple[str, object | None]:
+    if data == "adh:rebuild":
+        ensure_rebuild_allowed(handler_ctx.command_context.config.telegram)
+        return "Choose rebuild range for active episodes:", adherence_rebuild_range_keyboard()
+    if data == "adh:rebuild:cancel":
+        return "Adherence rebuild cancelled.", None
+    if data.startswith("adh:rebuild:range:"):
+        ensure_rebuild_allowed(handler_ctx.command_context.config.telegram)
+        days = int(data.rsplit(":", 1)[1])
+        return f"Rebuild adherence snapshots for active episodes over the last {days} days?", adherence_rebuild_confirm_keyboard(days)
+    if data.startswith("adh:rebuild:confirm:"):
+        ensure_rebuild_allowed(handler_ctx.command_context.config.telegram)
+        days = int(data.rsplit(":", 1)[1])
+        today = local_today(handler_ctx.command_context.config.timezone)
+        from_date = (today - timedelta(days=days - 1)).isoformat()
+        to_date = today.isoformat()
+        payload = handler_ctx.command_context.client.post(
+            "/adherence/rebuild",
+            json={"from": from_date, "to": to_date, "active_only": True, "source": "rebuild"},
+        )
+        return formatting.format_adherence_rebuild(payload), None
+    _, mode, days_text = data.split(":")
+    days = int(days_text)
+    today = local_today(handler_ctx.command_context.config.timezone)
+    from_date = (today - timedelta(days=days - 1)).isoformat()
+    to_date = today.isoformat()
+    params = {"from": from_date, "to": to_date}
+    if mode == "summary":
+        return formatting.format_adherence_summary(handler_ctx.command_context.client.get("/adherence/summary", params=params))
+    if mode == "calendar":
+        return formatting.format_adherence_days(handler_ctx.command_context.client.get("/adherence/calendar", params=params), title="Adherence calendar")
+    if mode == "missed":
+        return formatting.format_adherence_days(handler_ctx.command_context.client.get("/adherence/missed", params=params), title="Missed adherence days")
+    raise CzmError("Unsupported adherence action", exit_code=EXIT_USAGE)
+
+
+def _start_episode_subject_step(handler_ctx: TelegramHandlerContext, update) -> tuple[str, object | None]:
+    _set_state(update, handler_ctx, "start_episode", {})
+    payload = handler_ctx.command_context.client.get("/subjects")
+    subjects = payload.get("subjects", [])
+    return "Start episode: choose a subject.", start_subject_keyboard(subjects, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
+
+
+def _handle_start_episode_callback(data: str, handler_ctx: TelegramHandlerContext, update) -> tuple[str, object | None]:
+    identity = identity_from_update(update)
+    state, expired = _get_state(handler_ctx, identity)
+    if expired or state is None or state.name != "start_episode":
+        return EXPIRED_STATE_MESSAGE, None
+    flow = dict(state.data)
+    if data == "epstart:cancel":
+        _clear_state(handler_ctx, identity)
+        return "Start episode cancelled.", None
+    if data == "epstart:subject_new":
+        _set_state(update, handler_ctx, "start_episode_subject_text", flow)
+        return "Send the new subject display name.", None
+    if data.startswith("epstart:subject:"):
+        subject_id = int(data.rsplit(":", 1)[1])
+        subject = _find_by_id(handler_ctx.command_context.client.get("/subjects").get("subjects", []), subject_id)
+        flow.update({"subject_id": subject_id, "subject_name": subject.get("display_name", f"subject {subject_id}")})
+        _set_state(update, handler_ctx, "start_episode", flow)
+        return _start_episode_location_step(handler_ctx)
+    if data == "epstart:loc_new":
+        _set_state(update, handler_ctx, "start_episode_location_code", flow)
+        return "Send the new location code, for example left_elbow.", None
+    if data.startswith("epstart:loc:"):
+        location_id = int(data.rsplit(":", 1)[1])
+        location = _find_by_id(handler_ctx.command_context.client.get("/locations").get("locations", []), location_id)
+        flow.update(
+            {
+                "location_id": location_id,
+                "location_name": location.get("display_name", f"location {location_id}"),
+                "location_has_image": bool(location.get("image")),
+            }
+        )
+        _set_state(update, handler_ctx, "start_episode", flow)
+        return _start_episode_image_step(flow)
+    if data == "epstart:image":
+        if "location_id" not in flow:
+            return EXPIRED_STATE_MESSAGE, None
+        _set_state(update, handler_ctx, "start_episode_waiting_photo", flow)
+        return f"Send a photo for {flow.get('location_name', 'this location')}.", None
+    if data == "epstart:skip_image":
+        return _start_episode_confirm_step(flow)
+    if data == "epstart:confirm":
+        if "subject_id" not in flow or "location_id" not in flow:
+            return EXPIRED_STATE_MESSAGE, None
+        payload = handler_ctx.command_context.client.post(
+            "/episodes",
+            json={"subject_id": flow["subject_id"], "location_id": flow["location_id"], "protocol_version": "v1"},
+        )
+        _clear_state(handler_ctx, identity)
+        return formatting.format_episode_created(payload), None
+    return "Unknown or stale button. Tap /menu to start again.", None
+
+
+def _start_episode_location_step(handler_ctx: TelegramHandlerContext) -> tuple[str, object | None]:
+    payload = handler_ctx.command_context.client.get("/locations")
+    locations = payload.get("locations", [])
+    return "Choose a location.", start_location_keyboard(locations, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
+
+
+def _start_episode_image_step(flow: dict) -> tuple[str, object | None]:
+    return f"Location selected: {flow.get('location_name')}.\nAdd or replace its image?", start_image_keyboard()
+
+
+def _start_episode_confirm_step(flow: dict) -> tuple[str, object | None]:
+    image_text = "yes" if flow.get("location_has_image") else "no"
+    return (
+        "\n".join(
+            [
+                "Create episode?",
+                "",
+                f"Subject: {flow.get('subject_name', flow.get('subject_id'))}",
+                f"Location: {flow.get('location_name', flow.get('location_id'))}",
+                f"Image: {image_text}",
+            ]
+        ),
+        start_confirm_keyboard(),
+    )
+
+
+def _episode_action_list(handler_ctx: TelegramHandlerContext, action: str) -> tuple[str, object | None]:
+    episodes = handler_ctx.command_context.client.get("/episodes").get("episodes", [])
+    if action == "heal":
+        eligible = [episode for episode in episodes if episode.get("status") != "obsolete" and not episode.get("healed_at") and not episode.get("obsolete_at")]
+        title = "Choose an episode to heal."
+    else:
+        healed = [episode for episode in episodes if episode.get("healed_at") and not episode.get("obsolete_at")]
+        eligible = healed or [episode for episode in episodes if episode.get("status") != "obsolete" and not episode.get("obsolete_at")]
+        title = "Choose an episode to relapse."
+    if not eligible:
+        return f"No episodes available to {action}.", None
+    return title, episode_select_keyboard(action, eligible)
+
+
+def _handle_episode_action_callback(data: str, handler_ctx: TelegramHandlerContext, action: str) -> tuple[str, object | None]:
+    if data == f"{action}:cancel":
+        return f"{action.title()} cancelled.", None
+    if data.startswith(f"{action}:select:"):
+        episode_id = int(data.rsplit(":", 1)[1])
+        return f"{action.title()} episode {episode_id}?", confirm_episode_action_keyboard(action, episode_id)
+    if data.startswith(f"{action}:confirm:"):
+        episode_id = int(data.rsplit(":", 1)[1])
+        if action == "heal":
+            payload = handler_ctx.command_context.client.post(f"/episodes/{episode_id}/heal", json=None)
+            return formatting.format_episode_action_success("Healed", payload), None
+        payload = handler_ctx.command_context.client.post(f"/episodes/{episode_id}/relapse", json={"reason": "relapse"})
+        return formatting.format_episode_action_success("Relapsed", payload), None
+    return "Unknown or stale button. Tap /menu to start again.", None
+
+
+async def handle_guided_text(update, context, handler_ctx: TelegramHandlerContext) -> bool:
+    message = update.effective_message
+    identity = identity_from_update(update)
+    try:
+        ensure_allowed(handler_ctx.command_context.config.telegram, identity)
+        state, expired = _get_state(handler_ctx, identity)
+        if expired:
+            await message.reply_text(EXPIRED_STATE_MESSAGE)
+            return True
+        if state is None:
+            return False
+        ensure_writes_allowed(handler_ctx.command_context.config.telegram)
+        text = (getattr(message, "text", "") or "").strip()
+        if not text:
+            await message.reply_text("Send text, or tap /menu to start again.")
+            return True
+        if state.name == "create_subject":
+            payload = handler_ctx.command_context.client.post("/subjects", json={"display_name": text})
+            _clear_state(handler_ctx, identity)
+            await message.reply_text(formatting.format_subject_created(payload))
+            return True
+        if state.name == "create_location_code":
+            handler_ctx.state.set(identity.chat_id, identity.user_id, "create_location_display", {"code": text})
+            await message.reply_text("Send the location display name.")
+            return True
+        if state.name == "create_location_display":
+            payload = handler_ctx.command_context.client.post("/locations", json={"code": state.data["code"], "display_name": text})
+            location_id = payload["location"]["id"]
+            handler_ctx.state.set(identity.chat_id, identity.user_id, "created_location", {"location_id": location_id})
+            await message.reply_text(formatting.format_location_created(payload) + "\nAdd an image?", reply_markup=location_image_prompt_keyboard(location_id))
+            return True
+        if state.name == "start_episode_subject_text":
+            payload = handler_ctx.command_context.client.post("/subjects", json={"display_name": text})
+            subject = payload
+            flow = dict(state.data)
+            flow.update({"subject_id": subject["id"], "subject_name": subject["display_name"]})
+            handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode", flow)
+            location_text, keyboard = _start_episode_location_step(handler_ctx)
+            await message.reply_text(location_text, reply_markup=keyboard)
+            return True
+        if state.name == "start_episode_location_code":
+            flow = dict(state.data)
+            flow["location_code"] = text
+            handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode_location_display", flow)
+            await message.reply_text("Send the new location display name.")
+            return True
+        if state.name == "start_episode_location_display":
+            flow = dict(state.data)
+            payload = handler_ctx.command_context.client.post("/locations", json={"code": flow["location_code"], "display_name": text})
+            location = payload["location"]
+            flow.update({"location_id": location["id"], "location_name": location["display_name"], "location_has_image": bool(location.get("image"))})
+            handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode", flow)
+            image_text, keyboard = _start_episode_image_step(flow)
+            await message.reply_text(image_text, reply_markup=keyboard)
+            return True
+        if state.name == "waiting_location_photo":
+            await message.reply_text("Please send a Telegram photo for this location, or tap /menu to cancel.")
+            return True
+        if state.name == "start_episode_waiting_photo":
+            await message.reply_text("Please send a Telegram photo for this location, or tap /menu to cancel.")
+            return True
+        return False
+    except CzmError as exc:
+        await message.reply_text(exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message))
+        return True
+
+
+async def handle_location_image_set_text(update, context, handler_ctx: TelegramHandlerContext) -> str:
+    del context
+    identity = identity_from_update(update)
+    ensure_allowed(handler_ctx.command_context.config.telegram, identity)
+    ensure_writes_allowed(handler_ctx.command_context.config.telegram)
+    text = getattr(update.effective_message, "text", "") or ""
+    try:
+        parts = shlex.split(text)
+    except ValueError as exc:
+        raise CzmError("Usage: /location_image_set left_elbow", exit_code=EXIT_USAGE) from exc
+    if len(parts) != 2:
+        raise CzmError("Usage: /location_image_set left_elbow", exit_code=EXIT_USAGE)
+    reference = parts[1]
+    location_id = _resolve_location_id(handler_ctx, reference)
+    if identity.chat_id is None or identity.user_id is None:
+        raise CzmError("Telegram chat/user identity is missing", exit_code=EXIT_AUTH)
+    handler_ctx.state.set(identity.chat_id, identity.user_id, "waiting_location_photo", {"location_id": location_id})
+    return f"Send a photo for location {location_id}."
+
+
+async def handle_photo(update, context, handler_ctx: TelegramHandlerContext) -> None:
+    message = update.effective_message
+    identity = identity_from_update(update)
+    try:
+        ensure_allowed(handler_ctx.command_context.config.telegram, identity)
+        ensure_writes_allowed(handler_ctx.command_context.config.telegram)
+        state, expired = _get_state(handler_ctx, identity)
+        if expired:
+            await message.reply_text(EXPIRED_STATE_MESSAGE)
+            return
+        if state is None or state.name not in {"waiting_location_photo", "created_location", "start_episode_waiting_photo"}:
+            await message.reply_text(EXPIRED_STATE_MESSAGE)
+            return
+        location_id = int(state.data["location_id"])
+        photo = sorted(getattr(message, "photo", []) or [], key=lambda item: getattr(item, "file_size", 0) or 0)[-1]
+        file_obj = await photo.get_file()
+        content = bytes(await file_obj.download_as_bytearray())
+        handler_ctx.command_context.client.upload_bytes(
+            f"/locations/{location_id}/image",
+            field_name="image",
+            filename=f"telegram-location-{location_id}.jpg",
+            content=content,
+            content_type="image/jpeg",
+        )
+        if state.name == "start_episode_waiting_photo":
+            flow = dict(state.data)
+            flow["location_has_image"] = True
+            handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode", flow)
+            text, keyboard = _start_episode_confirm_step(flow)
+            await message.reply_text(f"Location image updated for location {location_id}.\n\n{text}", reply_markup=keyboard)
+            return
+        _clear_state(handler_ctx, identity)
+        await message.reply_text(f"Location image updated for location {location_id}.")
+    except IndexError:
+        await message.reply_text("Please send a Telegram photo.")
+    except CzmError as exc:
+        await message.reply_text(exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message))
+    except Exception:
+        await message.reply_text("Zema request failed.")
+
+
+def _set_state(update, handler_ctx: TelegramHandlerContext, name: str, data: dict | None = None) -> None:
+    identity = identity_from_update(update)
+    if identity.chat_id is None or identity.user_id is None:
+        raise CzmError("Telegram chat/user identity is missing", exit_code=EXIT_AUTH)
+    handler_ctx.state.set(identity.chat_id, identity.user_id, name, data)
+
+
+def _get_state(handler_ctx: TelegramHandlerContext, identity):
+    if identity.chat_id is None or identity.user_id is None:
+        return None, False
+    return handler_ctx.state.get_with_expiry(identity.chat_id, identity.user_id)
+
+
+def _clear_state(handler_ctx: TelegramHandlerContext, identity) -> None:
+    if identity.chat_id is not None and identity.user_id is not None:
+        handler_ctx.state.clear(identity.chat_id, identity.user_id)
+
+
+def _find_by_id(items: list[dict], item_id: int) -> dict:
+    for item in items:
+        if item.get("id") == item_id:
+            return item
+    return {"id": item_id}
+
+
+def _resolve_location_id(handler_ctx: TelegramHandlerContext, reference: str) -> int:
+    locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
+    try:
+        numeric = int(reference)
+    except ValueError:
+        numeric = None
+    if numeric is not None and any(item.get("id") == numeric for item in locations):
+        return numeric
+    lowered = reference.lower()
+    matches = [
+        item["id"]
+        for item in locations
+        if any((item.get(field) or "").lower() == lowered for field in ("code", "display_name"))
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    matches = [
+        item["id"]
+        for item in locations
+        if any(lowered in (item.get(field) or "").lower() for field in ("code", "display_name"))
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise CzmError(f"location not found: {reference}", exit_code=EXIT_USAGE)
+    raise CzmError(f"location reference is ambiguous: {reference}", exit_code=EXIT_USAGE)
+
+
+async def _edit_or_reply(query, text: str, keyboard) -> None:
+    if hasattr(query, "edit_message_text"):
+        await query.edit_message_text(text, reply_markup=keyboard)
+    else:
+        await query.message.reply_text(text, reply_markup=keyboard)
+
+
+async def _maybe_await(value):
+    if hasattr(value, "__await__"):
+        return await value
+    return value

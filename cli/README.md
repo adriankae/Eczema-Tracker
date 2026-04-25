@@ -72,6 +72,23 @@ Layout:
 ## Commands
 
 - `zema setup`
+- `zema setup telegram`
+- `zema config path`
+- `zema config show`
+- `zema config validate`
+- `zema config set`
+- `zema telegram test`
+- `zema telegram status`
+- `zema telegram run`
+- `zema telegram config show`
+- `zema telegram config validate`
+- `zema telegram config set-token`
+- `zema telegram config add-chat`
+- `zema telegram config remove-chat`
+- `zema telegram config add-user`
+- `zema telegram config remove-user`
+- `zema telegram config allow-writes`
+- `zema telegram config allow-adherence-rebuild`
 - `zema subject create`
 - `zema subject list`
 - `zema subject get`
@@ -114,6 +131,83 @@ zema adherence rebuild --episode 1 --from 2026-04-01 --to 2026-04-30
 ```
 
 For agent and gateway usage, prefer `--json` and run `zema` as an external tool or via the `zema-cli` container. Do not run Telegram, Hermes, or OpenClaw gateway code inside the backend container.
+
+## Telegram Runtime
+
+Telegram setup/config, typed slash commands, and button-guided workflows are available:
+
+```bash
+zema setup telegram \
+  --api-key "$CZM_API_KEY" \
+  --bot-token "$ZEMA_TELEGRAM_BOT_TOKEN" \
+  --allowed-chat-id 123456789 \
+  --timezone Europe/Berlin \
+  --yes
+
+zema telegram status
+zema telegram test
+zema telegram config show
+zema telegram run
+```
+
+Telegram secrets are masked by default. The config remains at `~/.config/czm/config.toml` or `$XDG_CONFIG_HOME/czm/config.toml`.
+
+Telegram environment variables:
+
+```text
+ZEMA_TELEGRAM_BOT_TOKEN
+ZEMA_TELEGRAM_ALLOWED_CHAT_IDS
+ZEMA_TELEGRAM_ALLOWED_USER_IDS
+ZEMA_TELEGRAM_ALLOW_WRITES
+ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD
+```
+
+The primary Telegram UX is button-driven. `/start` and `/menu` show buttons for starting episodes, logging treatments, checking due items, adherence, healing/relapsing episodes, locations, and subjects.
+
+Supported typed fallback commands:
+
+```text
+/start
+/menu
+/help
+/status
+/subjects
+/subject_create Child A
+/locations
+/location_create left_elbow Left elbow
+/location_image_set left_elbow
+/episodes
+/episode 12
+/episode_create subject:"Child A" location:left_elbow
+/due
+/log episode:12
+/events episode:12
+/timeline episode:12
+/adherence 30
+/adherence_calendar episode:12 days:30
+/adherence_missed episode:12 days:30
+/adherence_rebuild episode:12 from:2026-04-01 to:2026-04-30
+```
+
+The Telegram runtime uses explicit handlers. It does not execute arbitrary shell commands and does not support generic `/zema ...` passthrough.
+
+Guided workflows include:
+
+- Start episode.
+- Create subject.
+- Create location.
+- Set/replace a location image by sending a Telegram photo.
+- Log treatment from the due list.
+- Heal or relapse an episode after confirmation.
+- View adherence summary/calendar/missed days.
+- Rebuild adherence snapshots when explicitly enabled.
+
+Security defaults:
+
+- Allowed chat IDs are required.
+- Optional allowed user IDs can further restrict access.
+- Writes are enabled by default for allowlisted chats/users.
+- Adherence rebuild is disabled by default.
 
 ## Implementation Notes
 

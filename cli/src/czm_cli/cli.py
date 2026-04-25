@@ -21,12 +21,14 @@ from .errors import (
 )
 from .commands.application import register as register_application_commands
 from .commands.adherence import register as register_adherence_commands
+from .commands.config import register as register_config_commands
 from .commands.setup import register as register_setup_commands
 from .commands.due import register as register_due_commands
 from .commands.events import register as register_events_commands
 from .commands.episode import register as register_episode_commands
 from .commands.location import register as register_location_commands
 from .commands.subject import register as register_subject_commands
+from .commands.telegram import register as register_telegram_commands
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="zema", description="zema CLI client", parents=[parent])
     subparsers = parser.add_subparsers(dest="command", required=True)
     register_setup_commands(subparsers, parent)
+    register_config_commands(subparsers, parent)
+    register_telegram_commands(subparsers, parent)
     register_subject_commands(subparsers, parent)
     register_location_commands(subparsers, parent)
     register_episode_commands(subparsers, parent)
@@ -76,7 +80,7 @@ def run(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        if getattr(args, "command", None) == "setup":
+        if getattr(args, "command", None) in {"setup", "config", "telegram"}:
             return args.handler(None, args)
         config = resolve_runtime_config(
             base_url=getattr(args, "base_url", None),

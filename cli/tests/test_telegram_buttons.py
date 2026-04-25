@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import asyncio
+
+from czm_cli.config import AppConfig, TelegramConfig
+from czm_cli.telegram.commands import TelegramCommandContext
+from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text
+from czm_cli.telegram.runtime import TelegramRuntime, build_application
+from czm_cli.telegram.state import ConversationStore
+
+
+class FakeClient:
+    def __init__(self, *, allow_empty=False):
+        self.requests = []
+
+    def get(self, path, params=None):
+        self.requests.append(("GET", path, params))
+        if path == "/episodes/due":
+            return {"due": [{"episode_id": 12, "subject_id": 1, "location_id": 2, "current_phase_number": 1, "treatment_due_today": True}]}
+        if path == "/subjects":
+            return {"subjects": [{"id": 1, "display_name": "Child A"}]}
+        if path == "/locations":
+            return {"locations": [{"id": 2, "code": "left_elbow", "display_name": "Left elbow"}]}
+        if path == "/adherence/summary":
+            return {"from": "2026-04-01", "to": "2026-04-30", "expected_applications": 10, "credited_applications": 8, "adherence_score": 0.8, "missed_days": 2}
+        raise AssertionError(path)
+
+    def post(self, path, json=None, params=None):
+        self.requests.append(("POST", path, json))
+        if path == "/applications":
+            return {"application": {"id": 1, "episode_id": json["episode_id"]}}
+        if path == "/subjects":
+            return {"id": 3, "display_name": json["display_name"]}
+        if path == "/locations":
+            return {"location": {"id": 4, "code": json["code"], "display_name": json["display_name"]}}
+        raise AssertionError(path)
+
+
+class FakeMessage:
+    def __init__(self, text=""):
+        self.text = text
+        self.replies = []
+
+    async def reply_text(self, text, **kwargs):
+        self.replies.append((text, kwargs.get("reply_markup")))
+
+
+class FakeQuery:
+    def __init__(self, data):
+        self.data = data
+        self.edits = []
+        self.message = FakeMessage()
+
+    async def answer(self):
+        return None
+
+    async def edit_message_text(self, text, **kwargs):
+        self.edits.append((text, kwargs.get("reply_markup")))
+
+
+class Obj:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def make_handler(*, allow_writes=True, chat_id=123, user_id=1):
+    config = AppConfig(timezone="UTC", telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123], allow_writes=allow_writes))
+    client = FakeClient()
+    ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
+    update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
+    return ctx, client, update
+
+
+def test_menu_returns_main_keyboard():
+    app = build_application(TelegramRuntime(config=AppConfig(telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123])), client=FakeClient()))
+    handler = app.handlers[0][0].callback
+    message = FakeMessage("/menu")
+    update = Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=message)
+    run(handler(update, None))
+    assert message.replies[0][0].startswith("Zema")
+    assert message.replies[0][1] is not None
+
+
+def test_due_callback_includes_log_buttons_when_writes_enabled():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Due today" in query.edits[0][0]
+    assert query.edits[0][1] is not None
+
+
+def test_due_callback_hides_log_buttons_when_writes_disabled():
+    ctx, client, update = make_handler(allow_writes=False)
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert query.edits[0][1] is None
+
+
+def test_quick_log_button_posts_application():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("due:log:12")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert ("POST", "/applications", {"episode_id": 12}) in client.requests
+
+
+def test_write_callback_rejected_when_disabled():
+    ctx, client, update = make_handler(allow_writes=False)
+    query = FakeQuery("due:log:12")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "disabled" in query.edits[0][0]
+
+
+def test_subject_create_guided_flow():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("subject:create")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    message = FakeMessage("New Child")
+    text_update = Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=message)
+    assert run(handle_guided_text(text_update, None, ctx)) is True
+    assert ("POST", "/subjects", {"display_name": "New Child"}) in client.requests
+
+
+def test_create_location_guided_flow():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("loc:create")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    msg1 = FakeMessage("right_knee")
+    assert run(handle_guided_text(Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=msg1), None, ctx)) is True
+    msg2 = FakeMessage("Right knee")
+    assert run(handle_guided_text(Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=msg2), None, ctx)) is True
+    assert ("POST", "/locations", {"code": "right_knee", "display_name": "Right knee"}) in client.requests
+
+
+def test_unknown_chat_callback_rejected():
+    ctx, client, update = make_handler(chat_id=999)
+    query = FakeQuery("menu:subjects")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "not allowed" in query.edits[0][0]

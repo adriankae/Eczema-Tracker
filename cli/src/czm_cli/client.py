@@ -87,6 +87,18 @@ class CzmClient:
             return response.json()
         return None
 
+    def upload_bytes(self, path: str, *, field_name: str, filename: str, content: bytes, content_type: str | None = None) -> Any:
+        files = {field_name: (filename, content, content_type or "application/octet-stream")}
+        try:
+            response = self._client.post(path, files=files)
+        except httpx.HTTPError as exc:
+            raise TransportError(f"request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise self._map_http_error(response)
+        if response.content:
+            return response.json()
+        return None
+
     def patch(self, path: str, *, json: Mapping[str, Any] | None = None, params: Mapping[str, Any] | None = None) -> Any:
         return self.request("PATCH", path, json=json, params=params)
 

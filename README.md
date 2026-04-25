@@ -126,6 +126,19 @@ Inside Docker Compose, `zema-cli` uses:
 CZM_BASE_URL=http://zema-be:28173
 ```
 
+Run the Telegram bot as a separate profiled service:
+
+```bash
+export CZM_API_KEY="..."
+export ZEMA_TELEGRAM_BOT_TOKEN="..."
+export ZEMA_TELEGRAM_ALLOWED_CHAT_IDS="123456789"
+
+docker compose --profile telegram up -d zema-telegram
+docker compose logs -f zema-telegram
+```
+
+`zema-telegram` uses the CLI image, talks to `zema-be` over HTTP, and exposes no public ports.
+
 ## Authentication And API Keys
 
 The local Docker Compose setup seeds a default account when the database is empty:
@@ -256,6 +269,119 @@ zema location image set left_elbow ./left-elbow.jpg
 zema location image get left_elbow --output ./left-elbow.jpg
 zema location image remove left_elbow
 ```
+
+## Telegram Bot
+
+Zema 0.3.0 includes a Telegram frontend that runs outside the backend container:
+
+```text
+Telegram
+   |
+   v
+zema telegram run / zema-telegram
+   |
+   v
+zema-be
+   |
+   v
+PostgreSQL
+```
+
+The Telegram runtime uses explicit handlers and the same backend HTTP client layer as the CLI. It does not execute shell commands, does not support arbitrary `/zema ...` passthrough, and does not run inside `zema-be`.
+
+Local setup:
+
+```bash
+zema setup telegram
+zema telegram test
+zema telegram run
+```
+
+Non-interactive setup:
+
+```bash
+zema setup telegram \
+  --base-url http://localhost:28173 \
+  --api-key "$CZM_API_KEY" \
+  --bot-token "$ZEMA_TELEGRAM_BOT_TOKEN" \
+  --allowed-chat-id 123456789 \
+  --timezone Europe/Berlin \
+  --allow-writes \
+  --yes
+```
+
+Setup notes:
+
+- Create a Telegram bot token with BotFather.
+- Send `/start` to the bot during setup so Zema can discover chat IDs with Telegram `getUpdates`.
+- Config remains under `~/.config/czm/config.toml` or `$XDG_CONFIG_HOME/czm/config.toml`.
+- Writes are enabled by default for allowlisted chats/users.
+- Adherence rebuild remains disabled by default and must be explicitly enabled.
+
+The primary Telegram UX is button-driven. `/start` and `/menu` show:
+
+```text
+[Start episode]   [Log treatment]
+[Due today]       [Adherence]
+[Heal episode]    [Relapse episode]
+[Locations]       [Subjects]
+```
+
+Guided workflows include:
+
+- Start episode with subject/location selection or creation.
+- Create subject.
+- Create location.
+- Set or replace a location image by sending a Telegram photo.
+- Log due treatment.
+- Heal episode.
+- Relapse episode.
+- View adherence summary, calendar, and missed days.
+- Rebuild adherence snapshots when `allow_adherence_rebuild=true`.
+
+Typed slash commands remain available for power users:
+
+```text
+/start
+/menu
+/help
+/status
+/subjects
+/subject_create Child A
+/locations
+/location_create left_elbow Left elbow
+/location_image_set left_elbow
+/episodes
+/episode 12
+/episode_create subject:"Child A" location:left_elbow
+/due
+/log episode:12
+/events episode:12
+/timeline episode:12
+/adherence 30
+/adherence_calendar episode:12 days:30
+/adherence_missed episode:12 days:30
+/adherence_rebuild episode:12 from:2026-04-01 to:2026-04-30
+```
+
+Telegram security:
+
+- At least one allowed chat ID is required.
+- Optional allowed user IDs can further restrict access.
+- Unknown chats/users are rejected before backend calls.
+- Write actions require `allow_writes=true`.
+- Adherence rebuild requires `allow_adherence_rebuild=true`.
+- Secrets are masked in config display.
+- Do not commit Telegram bot tokens or Zema API keys.
+- Do not bake secrets into Docker images.
+
+Telegram limitations:
+
+- Conversation state is in-memory and resets on bot restart.
+- Webhook mode is not implemented.
+- There is no LLM or natural-language mode.
+- There is no arbitrary CLI passthrough.
+- Rich episode labels depend on fields returned by backend episode endpoints.
 
 ## Adherence Tracking
 
@@ -466,6 +592,11 @@ CLI environment variables:
 CZM_BASE_URL
 CZM_API_KEY
 CZM_TIMEZONE
+ZEMA_TELEGRAM_BOT_TOKEN
+ZEMA_TELEGRAM_ALLOWED_CHAT_IDS
+ZEMA_TELEGRAM_ALLOWED_USER_IDS
+ZEMA_TELEGRAM_ALLOW_WRITES
+ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD
 ```
 
 CLI config file locations:
@@ -481,7 +612,30 @@ Example CLI config:
 base_url = "http://localhost:28173"
 api_key = "your-api-key"
 timezone = "Europe/Berlin"
+
+[telegram]
+bot_token = "123456:telegram-token"
+allowed_chat_ids = [123456789]
+allowed_user_ids = []
+allow_writes = true
+allow_adherence_rebuild = false
+default_subject = ""
+default_location = ""
+command_mode = "buttons"
 ```
+
+Telegram setup/config and typed slash-command runtime:
+
+```bash
+zema setup telegram --help
+zema telegram status
+zema telegram test
+zema telegram config show
+zema telegram run
+zema config show
+```
+
+Secrets are masked by default in config display. Use `--show-secrets` only in a trusted local terminal.
 
 ## Agent / Telegram / Hermes / OpenClaw Integration
 
@@ -502,6 +656,24 @@ The repository includes an Agent Skills package under:
 ```text
 cli/skills/czm/
 ```
+
+Manual Telegram smoke test:
+
+```bash
+docker compose up -d postgres zema-be
+zema setup telegram
+zema telegram test
+zema telegram run
+```
+
+Docker Telegram smoke test:
+
+```bash
+docker compose --profile telegram up -d zema-telegram
+docker compose logs -f zema-telegram
+```
+
+In Telegram, test `/start`, `/menu`, `/due`, `/adherence 30`, and the main menu buttons.
 
 ## Troubleshooting
 
@@ -548,6 +720,13 @@ Missing or invalid `CZM_API_KEY`:
 
 - Run `zema setup`, or recreate an API key through `/auth/login` and `/api-keys`.
 - Remember that the CLI uses `X-API-Key`, not the JWT bearer token.
+
+Telegram bot does not answer:
+
+- Confirm `ZEMA_TELEGRAM_BOT_TOKEN` is valid with `zema telegram test`.
+- Confirm `ZEMA_TELEGRAM_ALLOWED_CHAT_IDS` includes the chat you are using.
+- Send `/start` to the bot after changing tokens or allowlists.
+- Check `docker compose logs -f zema-telegram` when using Docker.
 
 Persisted adherence is empty:
 
