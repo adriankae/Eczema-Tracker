@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from czm_cli.telegram.heatmap import STATUS_COLORS, build_heatmap_grid, render_heatmap_png, should_annotate
+from czm_cli.telegram.heatmap import LEGEND_STATUSES, STATUS_COLORS, build_heatmap_grid, render_heatmap_png, should_annotate
 
 
 def _day(day: str, *, episode_id=1, location_id=10, subject_id=100, status="completed", credited=1, expected=1):
@@ -55,17 +55,20 @@ def test_duplicate_location_labels_are_disambiguated():
 
 def test_status_colors_are_stable():
     assert set(STATUS_COLORS) == {"completed", "partial", "missed", "not_due", "future"}
+    assert LEGEND_STATUSES == ["completed", "partial", "missed", "not_due"]
+    assert "future" not in LEGEND_STATUSES
     assert STATUS_COLORS["completed"] != STATUS_COLORS["missed"]
 
 
-def test_render_heatmap_png_and_empty_state():
+def test_render_heatmap_png_future_status_and_empty_state():
     grid = build_heatmap_grid(
-        {"days": [_day("2026-04-01", status="missed", credited=0, expected=1)]},
+        {"days": [_day("2026-04-01", status="future", credited=0, expected=1)]},
         {"subjects": [{"id": 100, "display_name": "Child A"}]},
         {"locations": [{"id": 10, "display_name": "Left elbow"}]},
         from_date=date(2026, 4, 1),
         to_date=date(2026, 4, 1),
     )
+    assert grid.rows[0].statuses == ["future"]
     assert render_heatmap_png(grid).startswith(b"\x89PNG")
 
     empty = build_heatmap_grid({"days": []}, {"subjects": []}, {"locations": []}, from_date=date(2026, 4, 1), to_date=date(2026, 4, 7))

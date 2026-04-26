@@ -7,6 +7,7 @@ from typing import Any
 
 
 STATUS_ORDER = ["completed", "partial", "missed", "not_due", "future"]
+LEGEND_STATUSES = ["completed", "partial", "missed", "not_due"]
 STATUS_COLORS = {
     "completed": "#2f9e44",
     "partial": "#f59f00",
@@ -130,8 +131,8 @@ def render_heatmap_png(grid: HeatmapGrid, *, annotate: bool | None = None) -> by
                 if text:
                     ax.text(col_index, row_index, text, ha="center", va="center", fontsize=6, color="#212529")
 
-    legend = [Patch(facecolor=STATUS_COLORS[status], label=status.replace("_", " ")) for status in STATUS_ORDER]
-    ax.legend(handles=legend, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=min(5, len(legend)), fontsize=8, frameon=False)
+    legend = [Patch(facecolor=STATUS_COLORS[status], label=status.replace("_", " ")) for status in LEGEND_STATUSES]
+    ax.legend(handles=legend, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=len(legend), fontsize=8, frameon=False)
     fig.tight_layout()
     output = BytesIO()
     fig.savefig(output, format="png", bbox_inches="tight")

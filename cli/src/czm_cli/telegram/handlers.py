@@ -240,7 +240,8 @@ async def _send_adherence_summary_heatmap(update, handler_ctx: TelegramHandlerCo
         image.name = f"zema-adherence-heatmap-{days}d.png"
         await query.message.reply_photo(photo=image, caption=f"Adherence heatmap - last {days} days")
     except Exception:
-        return
+        pass
+    await _send_terminal_success(update, "Done.")
 
 
 def _start_episode_subject_step(handler_ctx: TelegramHandlerContext, update) -> tuple[str, object | None]:

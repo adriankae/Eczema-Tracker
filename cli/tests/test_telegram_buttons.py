@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
 from czm_cli.config import AppConfig, TelegramConfig
 from czm_cli.errors import CzmError, EXIT_CONFLICT, EXIT_NOT_FOUND
 from czm_cli.telegram.commands import TelegramCommandContext
@@ -135,6 +137,7 @@ def make_handler(
     delete_error=None,
     due_items=None,
     locations=None,
+    chat_type=None,
 ):
     config = AppConfig(timezone="UTC", telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123], allow_writes=allow_writes))
     client = FakeClient(
@@ -146,7 +149,7 @@ def make_handler(
         locations=locations,
     )
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
-    update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
+    update = Obj(effective_chat=Obj(id=chat_id, type=chat_type), effective_user=Obj(id=user_id))
     return ctx, client, update
 
 
@@ -349,7 +352,7 @@ def test_adherence_menu_includes_summary_90_days():
 
 
 def test_adherence_summary_sends_text_and_heatmap(monkeypatch):
-    ctx, client, update = make_handler()
+    ctx, client, update = make_handler(chat_type="private")
     monkeypatch.setattr(handlers_module, "render_heatmap_png", lambda grid: b"png-bytes")
     query = FakeQuery("adh:summary:30")
     update.callback_query = query
@@ -357,12 +360,28 @@ def test_adherence_summary_sends_text_and_heatmap(monkeypatch):
     assert "Adherence" in query.edits[0][0]
     assert query.message.replies[0][0] == "Adherence heatmap - last 30 days"
     assert query.message.replies[0][2].getvalue() == b"png-bytes"
+    assert query.message.replies[1][0] == "Done."
+    assert isinstance(query.message.replies[1][1], ReplyKeyboardMarkup)
+    labels = [button.text for row in query.message.replies[1][1].keyboard for button in row]
+    assert "Due now" in labels
     assert ("GET", "/adherence/summary", {"from": "2026-03-28", "to": "2026-04-26"}) in client.requests
     assert any(request[0:2] == ("GET", "/adherence/calendar") for request in client.requests)
 
 
+def test_adherence_summary_restores_inline_menu_in_group(monkeypatch):
+    ctx, _client, update = make_handler(chat_type="group")
+    monkeypatch.setattr(handlers_module, "render_heatmap_png", lambda grid: b"png-bytes")
+    query = FakeQuery("adh:summary:30")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert query.message.replies[1][0] == "Done."
+    assert isinstance(query.message.replies[1][1], InlineKeyboardMarkup)
+    labels = [button.text for row in query.message.replies[1][1].inline_keyboard for button in row]
+    assert "Due now" in labels
+
+
 def test_adherence_summary_still_sends_text_when_heatmap_render_fails(monkeypatch):
-    ctx, _client, update = make_handler()
+    ctx, _client, update = make_handler(chat_type="private")
     def fail_render(grid):
         raise RuntimeError("boom")
     monkeypatch.setattr(handlers_module, "render_heatmap_png", fail_render)
@@ -370,7 +389,8 @@ def test_adherence_summary_still_sends_text_when_heatmap_render_fails(monkeypatc
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert "Adherence" in query.edits[0][0]
-    assert query.message.replies == []
+    assert query.message.replies[0][0] == "Done."
+    assert isinstance(query.message.replies[0][1], ReplyKeyboardMarkup)
 
 
 def test_adherence_summary_still_sends_text_when_photo_send_fails(monkeypatch):
@@ -378,14 +398,15 @@ def test_adherence_summary_still_sends_text_when_photo_send_fails(monkeypatch):
         async def reply_photo(self, **kwargs):
             raise RuntimeError("telegram failed")
 
-    ctx, _client, update = make_handler()
+    ctx, _client, update = make_handler(chat_type="private")
     monkeypatch.setattr(handlers_module, "render_heatmap_png", lambda grid: b"png-bytes")
     query = FakeQuery("adh:summary:30")
     query.message = FailingPhotoMessage()
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert "Adherence" in query.edits[0][0]
-    assert query.message.replies == []
+    assert query.message.replies[0][0] == "Done."
+    assert isinstance(query.message.replies[0][1], ReplyKeyboardMarkup)
 
 
 def test_subject_create_guided_flow():
