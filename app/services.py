@@ -120,7 +120,7 @@ def delete_subject(db: Session, account: Account, subject_id: int) -> Subject:
         select(EczemaEpisode.id).where(EczemaEpisode.account_id == account.id, EczemaEpisode.subject_id == subject.id).limit(1)
     ).first()
     if has_episodes is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="subject has related episodes")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Subject has related episodes and cannot be deleted.")
     db.delete(subject)
     db.commit()
     return subject

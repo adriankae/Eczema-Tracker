@@ -7,7 +7,7 @@ import shlex
 
 from telegram.error import BadRequest
 
-from czm_cli.errors import CzmError, EXIT_AUTH, EXIT_USAGE
+from czm_cli.errors import CzmError, EXIT_AUTH, EXIT_CONFLICT, EXIT_NOT_FOUND, EXIT_USAGE
 from czm_cli.telegram import formatting
 from czm_cli.telegram.heatmap import build_heatmap_grid, render_heatmap_png
 from czm_cli.telegram.commands import TelegramCommandContext
@@ -28,6 +28,7 @@ from czm_cli.telegram.keyboards import (
     start_location_keyboard,
     start_subject_keyboard,
     subject_delete_confirm_keyboard,
+    subject_delete_recovery_keyboard,
     subject_delete_select_keyboard,
     subjects_keyboard,
 )
@@ -120,7 +121,12 @@ def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -
         ensure_writes_allowed(config.telegram)
         subject_id = int(data.rsplit(":", 1)[1])
         subject_name = _subject_name_for_id(handler_ctx, subject_id)
-        client.delete(f"/subjects/{subject_id}")
+        try:
+            client.delete(f"/subjects/{subject_id}")
+        except CzmError as exc:
+            _clear_state(handler_ctx, identity_from_update(update))
+            return _format_subject_delete_error(exc), subject_delete_recovery_keyboard()
+        _clear_state(handler_ctx, identity_from_update(update))
         return f"Deleted subject: {subject_name}.", main_menu_keyboard()
     if data == "subject:delete_cancel":
         return "Subject deletion cancelled.", main_menu_keyboard()
@@ -398,6 +404,27 @@ def _format_due_prompt(item: dict) -> str:
     if status:
         lines.append(f"Status: {status}")
     return "\n".join(lines)
+
+
+def _format_subject_delete_error(exc: CzmError) -> str:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 409 or exc.exit_code == EXIT_CONFLICT:
+        lines = [
+            "Subject cannot be deleted because it has related episodes or treatment history.",
+            "",
+            "To preserve medical history, delete/obsolete related episodes first if supported, or keep the subject.",
+        ]
+        detail = exc.message.strip()
+        duplicate_details = {
+            "subject has related episodes",
+            "subject has related episodes and cannot be deleted.",
+        }
+        if detail and detail.lower() not in duplicate_details:
+            lines.extend(["", f"Backend detail: {detail}"])
+        return "\n".join(lines)
+    if status_code == 404 or exc.exit_code == EXIT_NOT_FOUND:
+        return "Subject not found. It may already have been deleted."
+    return formatting.backend_error_message(exc.message)
 
 
 def _due_label_for_episode(handler_ctx: TelegramHandlerContext, episode_id: int) -> str:

@@ -75,6 +75,15 @@ def subject_delete_confirm_keyboard(subject_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def subject_delete_recovery_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Subjects", callback_data="menu:subjects")],
+            [InlineKeyboardButton("Open menu", callback_data="menu:open")],
+        ]
+    )
+
+
 def locations_keyboard(locations: list[dict], *, allow_writes: bool) -> InlineKeyboardMarkup | None:
     rows = [[InlineKeyboardButton(location["display_name"], callback_data=f"loc:select:{location['id']}")] for location in locations[:10]]
     if allow_writes:

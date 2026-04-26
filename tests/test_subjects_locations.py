@@ -34,7 +34,7 @@ def test_delete_subject_with_episode_is_blocked(client, auth_headers):
 
     deleted = client.delete(f"/subjects/{subject['id']}", headers=auth_headers)
     assert deleted.status_code == 409
-    assert deleted.json()["error"]["message"] == "subject has related episodes"
+    assert deleted.json()["error"]["message"] == "Subject has related episodes and cannot be deleted."
 
     still_present = client.get(f"/subjects/{subject['id']}", headers=auth_headers)
     assert still_present.status_code == 200

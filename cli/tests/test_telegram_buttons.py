@@ -406,22 +406,36 @@ def test_subject_delete_cancel_does_not_delete():
     assert not any(request[0] == "DELETE" for request in client.requests)
 
 
-def test_subject_delete_conflict_is_surfaced():
-    ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("subject has related episodes", exit_code=EXIT_CONFLICT))
+def test_subject_delete_conflict_is_surfaced_with_recovery_actions():
+    ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("Subject has related episodes and cannot be deleted.", exit_code=EXIT_CONFLICT))
     query = FakeQuery("subject:delete_confirm:1")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert ("DELETE", "/subjects/1", None) in client.requests
-    assert "subject has related episodes" in query.edits[0][0]
+    assert "Subject cannot be deleted because it has related episodes or treatment history." in query.edits[0][0]
+    assert "To preserve medical history" in query.edits[0][0]
+    assert "Traceback" not in query.edits[0][0]
+    assert "Zema request failed" not in query.edits[0][0]
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert labels == ["Subjects", "Open menu"]
 
 
-def test_subject_delete_not_found_is_surfaced():
+def test_subject_delete_conflict_surfaces_specific_backend_detail():
+    ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("subject is locked by retention policy", exit_code=EXIT_CONFLICT))
+    query = FakeQuery("subject:delete_confirm:1")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert ("DELETE", "/subjects/1", None) in client.requests
+    assert "Backend detail: subject is locked by retention policy" in query.edits[0][0]
+
+
+def test_subject_delete_not_found_is_surfaced_safely():
     ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("subject not found", exit_code=EXIT_NOT_FOUND))
     query = FakeQuery("subject:delete_confirm:1")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert ("DELETE", "/subjects/1", None) in client.requests
-    assert "subject not found" in query.edits[0][0]
+    assert query.edits[0][0] == "Subject not found. It may already have been deleted."
 
 
 def test_create_location_guided_flow():
