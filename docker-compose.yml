@@ -24,7 +24,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://eczema:eczema@postgres:5432/eczema
       APP_ENV: local
-      DEPLOYMENT_TIMEZONE: UTC
+      DEPLOYMENT_TIMEZONE: ${CZM_TIMEZONE:-Europe/Berlin}
       APP_PORT: 28173
       ENABLE_SCHEDULER: "true"
       JWT_SECRET: change-me-in-production

@@ -185,7 +185,7 @@ docker compose logs --tail=100 zema-telegram
 curl -sS http://localhost:28173/health
 ```
 
-Compose reads secrets such as `CZM_API_KEY`, `ZEMA_TELEGRAM_BOT_TOKEN`, and `ZEMA_TELEGRAM_ALLOWED_CHAT_IDS` from `.env`. Do not commit `.env`; `.env.example` contains placeholders only.
+Compose reads secrets such as `CZM_API_KEY`, `ZEMA_TELEGRAM_BOT_TOKEN`, and `ZEMA_TELEGRAM_ALLOWED_CHAT_IDS` from `.env`. Do not commit `.env`; `.env.example` contains placeholders only. `CZM_TIMEZONE` is shared with the backend as `DEPLOYMENT_TIMEZONE`, so due-slot calculations and Telegram runtime behavior use the same local timezone.
 
 The long-running `postgres`, `zema-be`, and `zema-telegram` services use `restart: unless-stopped`. If Docker is enabled on boot, they restart after a server reboot. Postgres data is stored in the `zema-postgres-data` named volume, and location images are stored in `zema-location-images`.
 

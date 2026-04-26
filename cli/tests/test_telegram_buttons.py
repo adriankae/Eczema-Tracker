@@ -12,25 +12,38 @@ from czm_cli.telegram.state import ConversationStore
 
 
 class FakeClient:
-    def __init__(self, *, allow_empty=False, image: bytes | None = b"image-bytes", empty_after_log=False, delete_error: CzmError | None = None):
+    def __init__(
+        self,
+        *,
+        allow_empty=False,
+        image: bytes | None = b"image-bytes",
+        empty_after_log=False,
+        delete_error: CzmError | None = None,
+        due_items: list[dict] | None = None,
+        locations: list[dict] | None = None,
+    ):
         self.requests = []
         self.allow_empty = allow_empty
         self.image = image
         self.empty_after_log = empty_after_log
         self.logged = False
         self.delete_error = delete_error
+        self.due_items = due_items
         self.subjects = [{"id": 1, "display_name": "Child A"}]
+        self.locations = locations or [{"id": 2, "code": "left_elbow", "display_name": "Left elbow"}]
 
     def get(self, path, params=None):
         self.requests.append(("GET", path, params))
         if path == "/episodes/due":
             if self.allow_empty or (self.empty_after_log and self.logged):
                 return {"due": []}
+            if self.due_items is not None:
+                return {"due": self.due_items}
             return {"due": [{"episode_id": 12, "subject_id": 1, "location_id": 2, "current_phase_number": 1, "treatment_due_today": True}]}
         if path == "/subjects":
             return {"subjects": self.subjects}
         if path == "/locations":
-            return {"locations": [{"id": 2, "code": "left_elbow", "display_name": "Left elbow"}]}
+            return {"locations": self.locations}
         if path == "/adherence/summary":
             return {"from": "2026-04-01", "to": "2026-04-30", "expected_applications": 10, "credited_applications": 8, "adherence_score": 0.8, "missed_days": 2}
         if path == "/adherence/calendar":
@@ -111,9 +124,27 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_handler(*, allow_writes=True, chat_id=123, user_id=1, allow_empty=False, image=b"image-bytes", empty_after_log=False, delete_error=None):
+def make_handler(
+    *,
+    allow_writes=True,
+    chat_id=123,
+    user_id=1,
+    allow_empty=False,
+    image=b"image-bytes",
+    empty_after_log=False,
+    delete_error=None,
+    due_items=None,
+    locations=None,
+):
     config = AppConfig(timezone="UTC", telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123], allow_writes=allow_writes))
-    client = FakeClient(allow_empty=allow_empty, image=image, empty_after_log=empty_after_log, delete_error=delete_error)
+    client = FakeClient(
+        allow_empty=allow_empty,
+        image=image,
+        empty_after_log=empty_after_log,
+        delete_error=delete_error,
+        due_items=due_items,
+        locations=locations,
+    )
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
     update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
     return ctx, client, update
@@ -176,6 +207,30 @@ def test_due_callback_falls_back_to_text_when_image_missing():
     run(handle_callback(update, None, ctx))
     assert "Left elbow" in query.message.replies[0][0]
     assert len(query.message.replies[0]) == 2
+
+
+def test_due_callback_renders_all_backend_due_items_location_first():
+    due_items = [
+        {"episode_id": 1, "subject_id": 1, "location_id": 1, "current_phase_number": 1, "treatment_due_today": True, "due_slot": "evening"},
+        {"episode_id": 2, "subject_id": 1, "location_id": 2, "current_phase_number": 1, "treatment_due_today": True, "due_slot": "evening"},
+        {"episode_id": 3, "subject_id": 1, "location_id": 3, "current_phase_number": 1, "treatment_due_today": True, "due_slot": "evening"},
+    ]
+    locations = [
+        {"id": 1, "code": "hinterkopf_links", "display_name": "Hinterkopf links"},
+        {"id": 2, "code": "kotelette_rechts", "display_name": "Kotelette rechts"},
+        {"id": 3, "code": "mundwinkel_rechts", "display_name": "Mundwinkel rechts"},
+    ]
+    ctx, _client, update = make_handler(allow_writes=True, due_items=due_items, locations=locations)
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    captions = [reply[0] for reply in query.message.replies]
+    assert query.edits[0][0] == "Due prompts below."
+    assert len(captions) == 3
+    assert any("Hinterkopf links" in caption for caption in captions)
+    assert any("Kotelette rechts" in caption for caption in captions)
+    assert any("Mundwinkel rechts" in caption for caption in captions)
+    assert all("Episode" not in caption for caption in captions)
 
 
 def test_log_treatment_uses_location_first_due_prompts():

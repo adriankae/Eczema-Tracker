@@ -183,6 +183,50 @@ def test_phase_one_evening_due_in_berlin_after_morning_applications(client, auth
     assert due_by_episode_id[episode_c["id"]]["applications_expected_today"] == 2
 
 
+def test_phase_one_evening_due_returns_morning_logged_episodes(client, auth_headers, monkeypatch):
+    import app.api as api
+    import app.services as services
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "deployment_timezone", "Europe/Berlin")
+    # 2026-04-26 is CEST: local 08:00 == 06:00 UTC.
+    monkeypatch.setattr(api, "utc_now", lambda: datetime(2026, 4, 26, 6, tzinfo=timezone.utc))
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 26, 6, tzinfo=timezone.utc))
+    episode_a = _create_episode(client, auth_headers, location_code="hinterkopf_links", location_name="Hinterkopf links")
+    episode_b = _create_episode(client, auth_headers, location_code="kotelette_rechts", location_name="Kotelette rechts")
+    episode_c = _create_episode(client, auth_headers, location_code="mundwinkel_rechts", location_name="Mundwinkel rechts")
+
+    logged_a = client.post(
+        "/applications",
+        headers=auth_headers,
+        # local 09:00 == 07:00 UTC.
+        json={"episode_id": episode_a["id"], "applied_at": "2026-04-26T07:00:00Z"},
+    )
+    assert logged_a.status_code == 201
+    logged_c = client.post(
+        "/applications",
+        headers=auth_headers,
+        # local 10:00 == 08:00 UTC.
+        json={"episode_id": episode_c["id"], "applied_at": "2026-04-26T08:00:00Z"},
+    )
+    assert logged_c.status_code == 201
+
+    # local 15:00 == 13:00 UTC.
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 26, 13, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    due_by_episode_id = {item["episode_id"]: item for item in due}
+
+    assert set(due_by_episode_id) == {episode_a["id"], episode_b["id"], episode_c["id"]}
+    assert all(item["due_slot"] == "evening" for item in due_by_episode_id.values())
+    assert due_by_episode_id[episode_a["id"]]["applications_completed_today"] == 1
+    assert due_by_episode_id[episode_b["id"]]["applications_completed_today"] == 0
+    assert due_by_episode_id[episode_c["id"]]["applications_completed_today"] == 1
+    assert due_by_episode_id[episode_a["id"]]["missed_slots_today"] == []
+    assert due_by_episode_id[episode_b["id"]]["missed_slots_today"] == ["morning"]
+    assert due_by_episode_id[episode_c["id"]]["missed_slots_today"] == []
+    assert all(item["applications_expected_today"] == 2 for item in due_by_episode_id.values())
+
+
 def test_phase_one_berlin_evening_application_satisfies_evening_slot(client, auth_headers, monkeypatch):
     import app.api as api
     import app.services as services

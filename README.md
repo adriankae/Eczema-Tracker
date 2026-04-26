@@ -174,6 +174,8 @@ ZEMA_TELEGRAM_ALLOW_WRITES=true
 ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD=false
 ```
 
+Docker Compose uses `CZM_TIMEZONE` for both backend due-slot logic and Telegram/CLI runtime behavior. For phase-1 AM/PM due checks, `zema-be` receives this value as `DEPLOYMENT_TIMEZONE`.
+
 Start the persistent backend and Telegram bot:
 
 ```bash
@@ -683,7 +685,7 @@ Docker Compose defaults:
 ```text
 DATABASE_URL=postgresql+psycopg://eczema:eczema@postgres:5432/eczema
 APP_ENV=local
-DEPLOYMENT_TIMEZONE=UTC
+DEPLOYMENT_TIMEZONE=${CZM_TIMEZONE:-Europe/Berlin}
 APP_PORT=28173
 ENABLE_SCHEDULER=true
 JWT_SECRET=change-me-in-production

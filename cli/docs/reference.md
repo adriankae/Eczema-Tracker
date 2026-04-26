@@ -154,7 +154,7 @@ docker compose logs --tail=100 zema-telegram
 curl -sS http://localhost:28173/health
 ```
 
-Compose reads `CZM_API_KEY`, `CZM_TIMEZONE`, `ZEMA_TELEGRAM_BOT_TOKEN`, `ZEMA_TELEGRAM_ALLOWED_CHAT_IDS`, `ZEMA_TELEGRAM_ALLOWED_USER_IDS`, `ZEMA_TELEGRAM_ALLOW_WRITES`, and `ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD` from `.env` or the shell environment. Keep `.env` private and do not commit it.
+Compose reads `CZM_API_KEY`, `CZM_TIMEZONE`, `ZEMA_TELEGRAM_BOT_TOKEN`, `ZEMA_TELEGRAM_ALLOWED_CHAT_IDS`, `ZEMA_TELEGRAM_ALLOWED_USER_IDS`, `ZEMA_TELEGRAM_ALLOW_WRITES`, and `ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD` from `.env` or the shell environment. Keep `.env` private and do not commit it. `CZM_TIMEZONE` also sets the backend `DEPLOYMENT_TIMEZONE`, so phase-1 AM/PM due slots and Telegram runtime behavior use the same local timezone.
 
 The persistent stack uses `restart: unless-stopped` for `postgres`, `zema-be`, and `zema-telegram`. If Docker is enabled on boot, the stack restarts after reboot. Database data persists in the `zema-postgres-data` named volume; uploaded location images persist in `zema-location-images`.
 
