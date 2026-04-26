@@ -669,23 +669,33 @@ def _phase_one_slot_due_item(episode: EczemaEpisode, phase: TaperProtocolPhase, 
     local_now = to_local(now)
     local_phase_start = to_local(episode.phase_started_at)
     today = local_now.date()
-    cutoff_local = datetime.combine(today, time(14, 0), tzinfo=deployment_tz())
+    tz = deployment_tz()
+    today_start_local = datetime.combine(today, time.min, tzinfo=tz)
+    cutoff_local = datetime.combine(today, time(14, 0), tzinfo=tz)
+    tomorrow_start_local = datetime.combine(today + timedelta(days=1), time.min, tzinfo=tz)
     day_start = local_midnight(today)
     cutoff = cutoff_local.astimezone(timezone.utc)
-    tomorrow_start = local_midnight(today + timedelta(days=1))
-    morning_exists = local_phase_start < cutoff_local
-    evening_exists = local_phase_start.date() <= today and local_phase_start < to_local(tomorrow_start)
+    morning_start_local = max(today_start_local, local_phase_start)
+    evening_start_local = max(cutoff_local, local_phase_start)
+    morning_exists = morning_start_local < cutoff_local
+    evening_exists = evening_start_local < tomorrow_start_local
     applications_expected_today = int(morning_exists) + int(evening_exists)
 
+    def _valid_phase_one_application(application: TreatmentApplication) -> bool:
+        return application.phase_number_snapshot in {None, 1} and to_local(application.applied_at) >= local_phase_start
+
+    valid_phase_one_applications = [application for application in applications if _valid_phase_one_application(application)]
     phase_one_today = [
         application
-        for application in applications
-        if (application.phase_number_snapshot in {None, 1})
-        and to_local(application.applied_at) >= local_phase_start
-        and to_local(application.applied_at).date() == today
+        for application in valid_phase_one_applications
+        if today_start_local <= to_local(application.applied_at) < tomorrow_start_local
     ]
-    morning_satisfied = morning_exists and any(to_local(application.applied_at) < cutoff_local for application in phase_one_today)
-    evening_satisfied = evening_exists and any(to_local(application.applied_at) >= cutoff_local for application in phase_one_today)
+
+    def _slot_satisfied(slot_start: datetime, slot_end: datetime) -> bool:
+        return any(slot_start <= to_local(application.applied_at) < slot_end for application in valid_phase_one_applications)
+
+    morning_satisfied = morning_exists and _slot_satisfied(morning_start_local, cutoff_local)
+    evening_satisfied = evening_exists and _slot_satisfied(evening_start_local, tomorrow_start_local)
     last_application_at = applications[-1].applied_at if applications else None
     base = {
         "episode_id": episode.id,

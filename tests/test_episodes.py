@@ -135,6 +135,105 @@ def test_phase_one_due_uses_morning_and_evening_slots(client, auth_headers, monk
     assert client.get("/episodes/due", headers=auth_headers).json()["due"] == []
 
 
+def test_phase_one_evening_due_in_berlin_after_morning_applications(client, auth_headers, monkeypatch):
+    import app.api as api
+    import app.services as services
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "deployment_timezone", "Europe/Berlin")
+    # 2026-04-06 is CEST: local 08:00 == 06:00 UTC.
+    monkeypatch.setattr(api, "utc_now", lambda: datetime(2026, 4, 6, 6, tzinfo=timezone.utc))
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 6, tzinfo=timezone.utc))
+    episode_a = _create_episode(client, auth_headers, location_code="berlin_slot_a", location_name="Berlin slot A")
+    episode_b = _create_episode(client, auth_headers, location_code="berlin_slot_b", location_name="Berlin slot B")
+    episode_c = _create_episode(client, auth_headers, location_code="berlin_slot_c", location_name="Berlin slot C")
+
+    logged_a = client.post(
+        "/applications",
+        headers=auth_headers,
+        # local 09:00 == 07:00 UTC.
+        json={"episode_id": episode_a["id"], "applied_at": "2026-04-06T07:00:00Z"},
+    )
+    assert logged_a.status_code == 201
+    logged_b = client.post(
+        "/applications",
+        headers=auth_headers,
+        # local 10:00 == 08:00 UTC.
+        json={"episode_id": episode_b["id"], "applied_at": "2026-04-06T08:00:00Z"},
+    )
+    assert logged_b.status_code == 201
+
+    # local 15:00 == 13:00 UTC. Morning applications must not satisfy evening.
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 13, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    due_by_episode_id = {item["episode_id"]: item for item in due}
+
+    assert set(due_by_episode_id) == {episode_a["id"], episode_b["id"], episode_c["id"]}
+    assert due_by_episode_id[episode_a["id"]]["due_slot"] == "evening"
+    assert due_by_episode_id[episode_b["id"]]["due_slot"] == "evening"
+    assert due_by_episode_id[episode_c["id"]]["due_slot"] == "evening"
+    assert due_by_episode_id[episode_a["id"]]["missed_slots_today"] == []
+    assert due_by_episode_id[episode_b["id"]]["missed_slots_today"] == []
+    assert due_by_episode_id[episode_c["id"]]["missed_slots_today"] == ["morning"]
+    assert due_by_episode_id[episode_a["id"]]["applications_completed_today"] == 1
+    assert due_by_episode_id[episode_b["id"]]["applications_completed_today"] == 1
+    assert due_by_episode_id[episode_c["id"]]["applications_completed_today"] == 0
+    assert due_by_episode_id[episode_a["id"]]["applications_expected_today"] == 2
+    assert due_by_episode_id[episode_b["id"]]["applications_expected_today"] == 2
+    assert due_by_episode_id[episode_c["id"]]["applications_expected_today"] == 2
+
+
+def test_phase_one_berlin_evening_application_satisfies_evening_slot(client, auth_headers, monkeypatch):
+    import app.api as api
+    import app.services as services
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "deployment_timezone", "Europe/Berlin")
+    monkeypatch.setattr(api, "utc_now", lambda: datetime(2026, 4, 6, 6, tzinfo=timezone.utc))
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 6, tzinfo=timezone.utc))
+    episode = _create_episode(client, auth_headers, location_code="berlin_evening_done", location_name="Berlin evening done")
+
+    logged_morning = client.post(
+        "/applications",
+        headers=auth_headers,
+        json={"episode_id": episode["id"], "applied_at": "2026-04-06T07:00:00Z"},
+    )
+    assert logged_morning.status_code == 201
+    logged_evening = client.post(
+        "/applications",
+        headers=auth_headers,
+        # local 15:30 == 13:30 UTC.
+        json={"episode_id": episode["id"], "applied_at": "2026-04-06T13:30:00Z"},
+    )
+    assert logged_evening.status_code == 201
+
+    # local 16:00 == 14:00 UTC.
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 14, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    assert episode["id"] not in {item["episode_id"] for item in due}
+
+
+def test_phase_one_berlin_episode_created_after_cutoff_expects_evening_only(client, auth_headers, monkeypatch):
+    import app.api as api
+    import app.services as services
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "deployment_timezone", "Europe/Berlin")
+    # local 15:00 == 13:00 UTC.
+    monkeypatch.setattr(api, "utc_now", lambda: datetime(2026, 4, 6, 13, tzinfo=timezone.utc))
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 13, tzinfo=timezone.utc))
+    episode = _create_episode(client, auth_headers, location_code="berlin_after_cutoff", location_name="Berlin after cutoff")
+
+    # local 15:05 == 13:05 UTC.
+    monkeypatch.setattr(services, "utc_now", lambda: datetime(2026, 4, 6, 13, 5, tzinfo=timezone.utc))
+    due = client.get("/episodes/due", headers=auth_headers).json()["due"]
+    assert len(due) == 1
+    assert due[0]["episode_id"] == episode["id"]
+    assert due[0]["due_slot"] == "evening"
+    assert due[0]["applications_expected_today"] == 1
+    assert due[0]["missed_slots_today"] == []
+
+
 def test_phase_one_after_cutoff_marks_missed_morning_without_requiring_catchup(client, auth_headers, monkeypatch):
     import app.api as api
     import app.services as services
