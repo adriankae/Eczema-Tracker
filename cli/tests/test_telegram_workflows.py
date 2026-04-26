@@ -13,6 +13,7 @@ from czm_cli.telegram.handlers import (
     handle_callback,
     handle_guided_text,
     handle_photo,
+    handle_text_message,
     safe_edit_callback_message,
 )
 from czm_cli.telegram.state import ConversationStore
@@ -172,10 +173,11 @@ def test_start_episode_existing_subject_location_skip_image_creates_episode():
     assert "Using subject: Child A" in query.edits[0][0]
     assert "Choose a location" in query.edits[0][0]
     labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
-    assert "Left elbow" in labels
+    assert "Left elbow" not in labels
+    assert "Right cheekbone" not in labels
     assert "Right knee" in labels
     assert "Create new location" in labels
-    assert not any("Episode" in label or "#10" in label or "#14" in label for label in labels)
+    assert not any("Episode" in label or "#" in label or "active_flare" in label or "in_taper" in label or "healed" in label or "obsolete" in label for label in labels)
     query = callback(ctx, update, "epstart:loc:6")
     assert "Add or replace" in query.edits[0][0]
     query = callback(ctx, update, "epstart:skip_image")
@@ -208,6 +210,32 @@ def test_start_episode_no_locations_goes_directly_to_create_location():
     assert query.edits[0][0] == "Using subject: Child A.\nNo locations exist yet. Send the new location display name."
     message = text(ctx, "New ankle")
     assert "Add or replace" in message.replies[0][0]
+
+
+def test_start_episode_all_locations_occupied_goes_directly_to_create_location():
+    ctx, _client, update = make_ctx(
+        locations=[
+            {"id": 2, "code": "left_elbow", "display_name": "Left elbow", "image": None},
+            {"id": 5, "code": "right_cheekbone", "display_name": "Right cheekbone", "image": None},
+        ]
+    )
+    query = callback(ctx, update, "menu:start_episode")
+    assert query.edits[0][0] == "Using subject: Child A.\nAll existing locations already have active episodes. Send the new location display name."
+    assert query.edits[0][1] is None
+    message = text(ctx, "New ankle")
+    assert "Add or replace" in message.replies[0][0]
+
+
+def test_reply_keyboard_start_episode_uses_creation_flow_without_episode_choices():
+    ctx, _client, _update = make_ctx()
+    message = FakeMessage("Start episode")
+    update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
+    run(handle_text_message(update, None, ctx))
+    assert "Using subject: Child A" in message.replies[0][0]
+    labels = [button.text for row in message.replies[0][1].inline_keyboard for button in row]
+    assert "Right knee" in labels
+    assert "Left elbow" not in labels
+    assert not any("Episode" in label or "#" in label or "active_flare" in label or "in_taper" in label or "healed" in label or "obsolete" in label for label in labels)
 
 
 def test_start_episode_create_subject_and_location_flow():

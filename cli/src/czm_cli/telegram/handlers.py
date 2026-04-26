@@ -322,11 +322,18 @@ def _handle_start_episode_callback(data: str, handler_ctx: TelegramHandlerContex
 def _start_episode_location_step(handler_ctx: TelegramHandlerContext, update=None, flow: dict | None = None) -> tuple[str, object | None]:
     payload = handler_ctx.command_context.client.get("/locations")
     locations = payload.get("locations", [])
-    if not locations:
+    available_locations = _available_start_locations(handler_ctx, flow or {}, locations)
+    if not available_locations:
         if update is not None:
             _set_state(update, handler_ctx, "start_episode_location_display", flow or {})
+        if locations:
+            return "All existing locations already have active episodes. Send the new location display name.", None
         return "No locations exist yet. Send the new location display name.", None
-    return "Choose a location.", start_location_keyboard(locations, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
+    return "Choose a location.", start_location_keyboard(available_locations, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
+
+
+def _available_start_locations(handler_ctx: TelegramHandlerContext, flow: dict, locations: list[dict]) -> list[dict]:
+    return [location for location in locations if _active_episode_for_start_location(handler_ctx, flow, int(location["id"])) is None]
 
 
 def _active_episode_for_start_location(handler_ctx: TelegramHandlerContext, flow: dict, location_id: int) -> dict | None:
