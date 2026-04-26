@@ -114,6 +114,18 @@ def get_subject(db: Session, account: Account, subject_id: int) -> Subject:
     return subject
 
 
+def delete_subject(db: Session, account: Account, subject_id: int) -> Subject:
+    subject = get_subject(db, account, subject_id)
+    has_episodes = db.execute(
+        select(EczemaEpisode.id).where(EczemaEpisode.account_id == account.id, EczemaEpisode.subject_id == subject.id).limit(1)
+    ).first()
+    if has_episodes is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="subject has related episodes")
+    db.delete(subject)
+    db.commit()
+    return subject
+
+
 def create_location(db: Session, account: Account, code: str, display_name: str) -> BodyLocation:
     location = BodyLocation(account_id=account.id, code=code, display_name=display_name)
     db.add(location)

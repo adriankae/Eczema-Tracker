@@ -27,3 +27,6 @@ def test_cross_account_access_is_blocked(client, auth_headers):
 
     forbidden = client.get(f"/subjects/{subject_id}", headers=auth_headers)
     assert forbidden.status_code == 404
+
+    forbidden_delete = client.delete(f"/subjects/{subject_id}", headers=auth_headers)
+    assert forbidden_delete.status_code == 404

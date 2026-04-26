@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from czm_cli.config import AppConfig, TelegramConfig
+from czm_cli.errors import CzmError, EXIT_CONFLICT, EXIT_NOT_FOUND
 from czm_cli.telegram.commands import TelegramCommandContext
 from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text, handle_text_message
 from czm_cli.telegram.runtime import TelegramRuntime, build_application
@@ -10,12 +11,14 @@ from czm_cli.telegram.state import ConversationStore
 
 
 class FakeClient:
-    def __init__(self, *, allow_empty=False, image: bytes | None = b"image-bytes", empty_after_log=False):
+    def __init__(self, *, allow_empty=False, image: bytes | None = b"image-bytes", empty_after_log=False, delete_error: CzmError | None = None):
         self.requests = []
         self.allow_empty = allow_empty
         self.image = image
         self.empty_after_log = empty_after_log
         self.logged = False
+        self.delete_error = delete_error
+        self.subjects = [{"id": 1, "display_name": "Child A"}]
 
     def get(self, path, params=None):
         self.requests.append(("GET", path, params))
@@ -24,11 +27,19 @@ class FakeClient:
                 return {"due": []}
             return {"due": [{"episode_id": 12, "subject_id": 1, "location_id": 2, "current_phase_number": 1, "treatment_due_today": True}]}
         if path == "/subjects":
-            return {"subjects": [{"id": 1, "display_name": "Child A"}]}
+            return {"subjects": self.subjects}
         if path == "/locations":
             return {"locations": [{"id": 2, "code": "left_elbow", "display_name": "Left elbow"}]}
         if path == "/adherence/summary":
             return {"from": "2026-04-01", "to": "2026-04-30", "expected_applications": 10, "credited_applications": 8, "adherence_score": 0.8, "missed_days": 2}
+        raise AssertionError(path)
+
+    def delete(self, path, json=None, params=None):
+        self.requests.append(("DELETE", path, json))
+        if self.delete_error is not None:
+            raise self.delete_error
+        if path == "/subjects/1":
+            return {"id": 1, "display_name": "Child A"}
         raise AssertionError(path)
 
     def post(self, path, json=None, params=None):
@@ -83,9 +94,9 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_handler(*, allow_writes=True, chat_id=123, user_id=1, allow_empty=False, image=b"image-bytes", empty_after_log=False):
+def make_handler(*, allow_writes=True, chat_id=123, user_id=1, allow_empty=False, image=b"image-bytes", empty_after_log=False, delete_error=None):
     config = AppConfig(timezone="UTC", telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123], allow_writes=allow_writes))
-    client = FakeClient(allow_empty=allow_empty, image=image, empty_after_log=empty_after_log)
+    client = FakeClient(allow_empty=allow_empty, image=image, empty_after_log=empty_after_log, delete_error=delete_error)
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
     update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
     return ctx, client, update
@@ -101,7 +112,8 @@ def test_menu_returns_main_keyboard():
     assert message.replies[0][1] is not None
     labels = [button.text for row in message.replies[0][1].inline_keyboard for button in row]
     assert "Log treatment" not in labels
-    assert "Due today" in labels
+    assert "Due now" in labels
+    assert "Due today" not in labels
 
 
 def test_persistent_reply_keyboard_does_not_include_log_treatment():
@@ -112,7 +124,8 @@ def test_persistent_reply_keyboard_does_not_include_log_treatment():
     run(handler(update, None))
     labels = [button.text for row in message.replies[0][1].keyboard for button in row]
     assert "Log treatment" not in labels
-    assert "Due today" in labels
+    assert "Due now" in labels
+    assert "Due today" not in labels
 
 
 def test_due_callback_includes_log_buttons_when_writes_enabled():
@@ -171,12 +184,23 @@ def test_reply_keyboard_due_today_uses_location_first_due_prompts():
     assert ("DOWNLOAD", "/locations/2/image", None) in client.requests
 
 
+def test_reply_keyboard_due_now_uses_location_first_due_prompts():
+    ctx, client, _update = make_handler(allow_writes=True)
+    message = FakeMessage("Due now")
+    update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
+    run(handle_text_message(update, None, ctx))
+    assert message.replies[0][0] == "Due prompts below."
+    assert "Left elbow" in message.replies[1][0]
+    assert "Episode 12" not in message.replies[1][0]
+    assert ("DOWNLOAD", "/locations/2/image", None) in client.requests
+
+
 def test_reply_keyboard_log_treatment_reuses_due_prompts():
     ctx, _client, _update = make_handler(allow_writes=True)
     message = FakeMessage("Log treatment")
     update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
     run(handle_text_message(update, None, ctx))
-    assert message.replies[0][0] == "Log treatment moved to Due today."
+    assert message.replies[0][0] == "Log treatment moved to Due now."
     assert message.replies[1][0] == "Due prompts below."
     assert "Left elbow" in message.replies[2][0]
     assert "Episode 12" not in message.replies[2][0]
@@ -252,6 +276,86 @@ def test_subject_create_guided_flow():
     text_update = Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=message)
     assert run(handle_guided_text(text_update, None, ctx)) is True
     assert ("POST", "/subjects", {"display_name": "New Child"}) in client.requests
+
+
+def test_subjects_menu_shows_delete_when_writes_enabled():
+    ctx, _client, update = make_handler(allow_writes=True)
+    query = FakeQuery("menu:subjects")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert "Create subject" in labels
+    assert "Delete subject" in labels
+    assert "Open menu" in labels
+
+
+def test_subjects_menu_hides_delete_when_writes_disabled():
+    ctx, _client, update = make_handler(allow_writes=False)
+    query = FakeQuery("menu:subjects")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert "Delete subject" not in labels
+    assert labels == ["Open menu"]
+
+
+def test_subject_delete_callback_rejected_when_writes_disabled():
+    ctx, client, update = make_handler(allow_writes=False)
+    query = FakeQuery("subject:delete")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "disabled" in query.edits[0][0]
+    assert not any(request[0] == "DELETE" for request in client.requests)
+
+
+def test_subject_delete_flow_confirms_and_deletes():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("subject:delete")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert query.edits[0][0] == "Choose a subject to delete."
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert "Child A" in labels
+
+    query = FakeQuery("subject:delete_select:1")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert 'Delete subject "Child A"?' in query.edits[0][0]
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert labels == ["Confirm delete", "Cancel"]
+
+    query = FakeQuery("subject:delete_confirm:1")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert ("DELETE", "/subjects/1", None) in client.requests
+    assert query.edits[0][0] == "Deleted subject: Child A."
+
+
+def test_subject_delete_cancel_does_not_delete():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("subject:delete_cancel")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert query.edits[0][0] == "Subject deletion cancelled."
+    assert not any(request[0] == "DELETE" for request in client.requests)
+
+
+def test_subject_delete_conflict_is_surfaced():
+    ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("subject has related episodes", exit_code=EXIT_CONFLICT))
+    query = FakeQuery("subject:delete_confirm:1")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert ("DELETE", "/subjects/1", None) in client.requests
+    assert "subject has related episodes" in query.edits[0][0]
+
+
+def test_subject_delete_not_found_is_surfaced():
+    ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("subject not found", exit_code=EXIT_NOT_FOUND))
+    query = FakeQuery("subject:delete_confirm:1")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert ("DELETE", "/subjects/1", None) in client.requests
+    assert "subject not found" in query.edits[0][0]
 
 
 def test_create_location_guided_flow():

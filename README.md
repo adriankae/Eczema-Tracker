@@ -324,16 +324,17 @@ The primary Telegram UX is button-driven. Zema registers a Telegram command menu
 The menu includes:
 
 ```text
-[Start episode]   [Log treatment]
-[Due today]       [Adherence]
-[Heal episode]    [Relapse episode]
-[Locations]       [Subjects]
+[Start episode]   [Due now]
+[Adherence]       [Heal episode]
+[Relapse episode] [Locations]
+[Subjects]
 ```
 
 Guided workflows include:
 
 - Start episode with subject/location selection or creation.
 - Create subject.
+- Delete subject when it has no related episodes.
 - Create location.
 - Set or replace a location image by sending a Telegram photo.
 - Log due treatment.

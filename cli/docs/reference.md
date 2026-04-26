@@ -146,8 +146,7 @@ docker compose logs -f zema-telegram
 
 ```text
 Start episode
-Log treatment
-Due today
+Due now
 Adherence
 Heal episode
 Relapse episode
@@ -155,7 +154,7 @@ Locations
 Subjects
 ```
 
-Button-guided workflows support starting episodes, creating subjects/locations, setting location images from Telegram photos, logging due treatments, healing/relapsing episodes with confirmation, adherence views, and adherence rebuild when explicitly enabled.
+Button-guided workflows support starting episodes, creating/deleting subjects, creating locations, setting location images from Telegram photos, logging due treatments, healing/relapsing episodes with confirmation, adherence views, and adherence rebuild when explicitly enabled.
 
 Reminder behavior:
 

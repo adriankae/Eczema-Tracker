@@ -25,6 +25,8 @@ from czm_cli.telegram.keyboards import (
     start_image_keyboard,
     start_location_keyboard,
     start_subject_keyboard,
+    subject_delete_confirm_keyboard,
+    subject_delete_select_keyboard,
     subjects_keyboard,
 )
 from czm_cli.telegram.reminders import SnoozeStore
@@ -89,6 +91,34 @@ def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -
         ensure_writes_allowed(config.telegram)
         _set_state(update, handler_ctx, "create_subject")
         return "Send the subject display name.", None
+    if data == "subject:delete":
+        ensure_writes_allowed(config.telegram)
+        subjects = client.get("/subjects").get("subjects", [])
+        if not subjects:
+            return "No subjects to delete.", main_menu_keyboard()
+        return "Choose a subject to delete.", subject_delete_select_keyboard(subjects)
+    if data.startswith("subject:delete_select:"):
+        ensure_writes_allowed(config.telegram)
+        subject_id = int(data.rsplit(":", 1)[1])
+        subject = _find_by_id(client.get("/subjects").get("subjects", []), subject_id)
+        return (
+            "\n".join(
+                [
+                    f'Delete subject "{subject.get("display_name", f"subject {subject_id}")}"?',
+                    "",
+                    "This may also affect related episodes/data depending on backend behavior.",
+                ]
+            ),
+            subject_delete_confirm_keyboard(subject_id),
+        )
+    if data.startswith("subject:delete_confirm:"):
+        ensure_writes_allowed(config.telegram)
+        subject_id = int(data.rsplit(":", 1)[1])
+        subject_name = _subject_name_for_id(handler_ctx, subject_id)
+        client.delete(f"/subjects/{subject_id}")
+        return f"Deleted subject: {subject_name}.", main_menu_keyboard()
+    if data == "subject:delete_cancel":
+        return "Subject deletion cancelled.", main_menu_keyboard()
     if data == "menu:locations":
         payload = client.get("/locations")
         return formatting.format_locations(payload), locations_keyboard(payload.get("locations", []), allow_writes=config.telegram.allow_writes)
@@ -346,6 +376,14 @@ def _due_label_for_episode(handler_ctx: TelegramHandlerContext, episode_id: int)
     return f"episode {episode_id}"
 
 
+def _subject_name_for_id(handler_ctx: TelegramHandlerContext, subject_id: int) -> str:
+    try:
+        subject = _find_by_id(handler_ctx.command_context.client.get("/subjects").get("subjects", []), subject_id)
+        return subject.get("display_name", f"subject {subject_id}")
+    except Exception:
+        return f"subject {subject_id}"
+
+
 def _enriched_due_items(handler_ctx: TelegramHandlerContext) -> list[dict]:
     due_items = handler_ctx.command_context.client.get("/episodes/due").get("due", [])
     subjects = handler_ctx.command_context.client.get("/subjects").get("subjects", [])
@@ -450,6 +488,7 @@ async def handle_text_message(update, context, handler_ctx: TelegramHandlerConte
     text = (getattr(message, "text", "") or "").strip()
     mapping = {
         "Start episode": "menu:start_episode",
+        "Due now": "menu:due",
         "Due today": "menu:due",
         "Adherence": "menu:adherence",
         "Heal episode": "menu:heal",
@@ -460,7 +499,7 @@ async def handle_text_message(update, context, handler_ctx: TelegramHandlerConte
     if text == "Log treatment":
         try:
             ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
-            await message.reply_text("Log treatment moved to Due today.", reply_markup=_reply_keyboard_for_update(update))
+            await message.reply_text("Log treatment moved to Due now.", reply_markup=_reply_keyboard_for_update(update))
             await _send_due_prompts_from_message(message, handler_ctx)
         except CzmError as exc:
             reply = exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)
@@ -471,7 +510,7 @@ async def handle_text_message(update, context, handler_ctx: TelegramHandlerConte
     if text in mapping:
         try:
             ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
-            if text in {"Due today", "Log treatment"}:
+            if text in {"Due now", "Due today", "Log treatment"}:
                 await _send_due_prompts_from_message(message, handler_ctx)
                 return
             reply, keyboard = _dispatch_callback(mapping[text], handler_ctx, update)

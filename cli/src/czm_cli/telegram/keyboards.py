@@ -6,7 +6,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Start episode", callback_data="menu:start_episode"), InlineKeyboardButton("Due today", callback_data="menu:due")],
+            [InlineKeyboardButton("Start episode", callback_data="menu:start_episode"), InlineKeyboardButton("Due now", callback_data="menu:due")],
             [InlineKeyboardButton("Adherence", callback_data="menu:adherence"), InlineKeyboardButton("Heal episode", callback_data="menu:heal")],
             [InlineKeyboardButton("Relapse episode", callback_data="menu:relapse"), InlineKeyboardButton("Locations", callback_data="menu:locations")],
             [InlineKeyboardButton("Subjects", callback_data="menu:subjects")],
@@ -17,7 +17,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 def main_menu_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            [KeyboardButton("Start episode"), KeyboardButton("Due today")],
+            [KeyboardButton("Start episode"), KeyboardButton("Due now")],
             [KeyboardButton("Adherence"), KeyboardButton("Heal episode")],
             [KeyboardButton("Relapse episode"), KeyboardButton("Locations")],
             [KeyboardButton("Subjects")],
@@ -50,8 +50,29 @@ def due_prompt_keyboard(episode_id: int, *, allow_writes: bool) -> InlineKeyboar
 
 def subjects_keyboard(*, allow_writes: bool) -> InlineKeyboardMarkup | None:
     if not allow_writes:
-        return None
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Create subject", callback_data="subject:create")]])
+        return open_menu_keyboard()
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Create subject", callback_data="subject:create")],
+            [InlineKeyboardButton("Delete subject", callback_data="subject:delete")],
+            [InlineKeyboardButton("Open menu", callback_data="menu:open")],
+        ]
+    )
+
+
+def subject_delete_select_keyboard(subjects: list[dict]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(subject["display_name"], callback_data=f"subject:delete_select:{subject['id']}")] for subject in subjects[:10]]
+    rows.append([InlineKeyboardButton("Cancel", callback_data="subject:delete_cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def subject_delete_confirm_keyboard(subject_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Confirm delete", callback_data=f"subject:delete_confirm:{subject_id}")],
+            [InlineKeyboardButton("Cancel", callback_data="subject:delete_cancel")],
+        ]
+    )
 
 
 def locations_keyboard(locations: list[dict], *, allow_writes: bool) -> InlineKeyboardMarkup | None:

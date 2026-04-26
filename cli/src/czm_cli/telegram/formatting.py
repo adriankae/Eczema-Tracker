@@ -133,7 +133,7 @@ def format_due(payload: dict[str, Any]) -> str:
         f"{item['episode_id']}. subject={item['subject_id']} location={item['location_id']} phase={item['current_phase_number']} due={item['treatment_due_today']}"
         for item in due
     ]
-    return "Due today:\n" + "\n".join(_cap(lines, len(due)))
+    return "Due now:\n" + "\n".join(_cap(lines, len(due)))
 
 
 def format_application_logged(payload: dict[str, Any]) -> str:

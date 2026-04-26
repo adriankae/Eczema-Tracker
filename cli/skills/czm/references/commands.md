@@ -46,7 +46,7 @@ Secrets are masked by default in config output.
 Telegram runtime:
 
 - Prefer `/start` or `/menu` for button-driven workflows.
-- Buttons support due items, quick treatment logging, subject/location workflows, location image photo upload, start episode, heal/relapse, and adherence.
+- Buttons support due-now items, quick treatment logging, subject create/delete workflows, location workflows, location image photo upload, start episode, heal/relapse, and adherence.
 - Typed slash commands are fallback shortcuts.
 - The bot does not support arbitrary `/zema ...` passthrough or shell execution.
 

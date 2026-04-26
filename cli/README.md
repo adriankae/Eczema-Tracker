@@ -215,9 +215,10 @@ Guided workflows include:
 
 - Start episode.
 - Create subject.
+- Delete subject when it has no related episodes.
 - Create location.
 - Set/replace a location image by sending a Telegram photo.
-- Log treatment from the due list.
+- Log applications from Due now prompts.
 - Heal or relapse an episode after confirmation.
 - View adherence summary/calendar/missed days.
 - Rebuild adherence snapshots when explicitly enabled.

@@ -60,6 +60,7 @@ from app.services import (
     create_location,
     create_subject,
     delete_application,
+    delete_subject,
     due_items,
     get_application,
     get_episode,
@@ -229,6 +230,11 @@ def subjects_list(actor: ActorContext = Depends(get_current_actor), db: Session 
 @router.get("/subjects/{subject_id}", response_model=SubjectOut)
 def subjects_get(subject_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
     return _subject_response(get_subject(db, actor.account, subject_id))
+
+
+@router.delete("/subjects/{subject_id}", response_model=SubjectOut)
+def subjects_delete(subject_id: int, actor: ActorContext = Depends(get_current_actor), db: Session = Depends(get_db)):
+    return _subject_response(delete_subject(db, actor.account, subject_id))
 
 
 @router.post("/locations", response_model=LocationCreateResponse, status_code=status.HTTP_201_CREATED)
