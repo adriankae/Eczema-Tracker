@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Iterable
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.time import local_date, utc_now
+from app.core.time import deployment_tz, local_date, to_local, utc_now
 from app.models import Account, EpisodeDailyAdherence, EpisodePhaseHistory, TaperProtocolPhase, TreatmentApplication
 from app.services import get_episode, list_episodes
 
@@ -74,19 +74,82 @@ def _status_for(date_value: date, expected: int, completed: int, today: date) ->
     return "not_due"
 
 
-def _applications_by_local_date(db: Session, episode_id: int) -> dict[date, int]:
-    applications = db.execute(
-        select(TreatmentApplication).where(
-            TreatmentApplication.episode_id == episode_id,
-            TreatmentApplication.is_deleted.is_(False),
-            TreatmentApplication.is_voided.is_(False),
-        )
-    ).scalars()
+def _applications_for_episode(db: Session, episode_id: int) -> list[TreatmentApplication]:
+    return list(
+        db.execute(
+            select(TreatmentApplication).where(
+                TreatmentApplication.episode_id == episode_id,
+                TreatmentApplication.is_deleted.is_(False),
+                TreatmentApplication.is_voided.is_(False),
+            )
+        ).scalars()
+    )
+
+
+def _applications_by_local_date(applications: list[TreatmentApplication]) -> dict[date, int]:
     counts: dict[date, int] = {}
     for application in applications:
         applied_date = local_date(application.applied_at)
         counts[applied_date] = counts.get(applied_date, 0) + 1
     return counts
+
+
+def _phase_one_adherence_counts(
+    applications: list[TreatmentApplication],
+    history: EpisodePhaseHistory,
+    date_value: date,
+) -> tuple[int, int, int]:
+    tz = deployment_tz()
+    phase_start = to_local(history.started_at)
+    phase_end = to_local(history.ended_at) if history.ended_at is not None else None
+    day_start = datetime.combine(date_value, time.min, tzinfo=tz)
+    cutoff = datetime.combine(date_value, time(14, 0), tzinfo=tz)
+    tomorrow_start = datetime.combine(date_value + timedelta(days=1), time.min, tzinfo=tz)
+    day_end = min(tomorrow_start, phase_end) if phase_end is not None else tomorrow_start
+
+    morning_start = max(day_start, phase_start)
+    morning_end = min(cutoff, day_end)
+    evening_start = max(cutoff, phase_start)
+    evening_end = day_end
+    expected_slots = [
+        (morning_start, morning_end),
+        (evening_start, evening_end),
+    ]
+    expected_slots = [(slot_start, slot_end) for slot_start, slot_end in expected_slots if slot_start < slot_end]
+
+    valid_applications = [
+        application
+        for application in applications
+        if application.phase_number_snapshot in {None, 1}
+        and (applied_at := to_local(application.applied_at)) >= phase_start
+        and applied_at < day_end
+        and day_start <= applied_at < tomorrow_start
+    ]
+    credited = sum(
+        1
+        for slot_start, slot_end in expected_slots
+        if any(slot_start <= to_local(application.applied_at) < slot_end for application in valid_applications)
+    )
+    return len(expected_slots), len(valid_applications), credited
+
+
+def _adherence_counts_for_date(
+    phase: TaperProtocolPhase,
+    history: EpisodePhaseHistory,
+    applications: list[TreatmentApplication],
+    applications_by_date: dict[date, int],
+    date_value: date,
+) -> tuple[int, int, int]:
+    phase_start_date = local_date(history.started_at)
+    days_since_phase_start = (date_value - phase_start_date).days
+    is_due = days_since_phase_start % phase.apply_every_n_days == 0
+    if not is_due:
+        return 0, applications_by_date.get(date_value, 0), 0
+    if phase.phase_number == 1 and phase.applications_per_day == 2:
+        return _phase_one_adherence_counts(applications, history, date_value)
+    expected = phase.applications_per_day
+    completed = applications_by_date.get(date_value, 0)
+    return expected, completed, min(completed, expected)
 
 
 def _protocol_phases_by_number(db: Session) -> dict[int, TaperProtocolPhase]:
@@ -114,7 +177,8 @@ def calculate_episode_adherence(
         return []
 
     protocol_phases = _protocol_phases_by_number(db)
-    applications_by_date = _applications_by_local_date(db, episode.id)
+    applications = _applications_for_episode(db, episode.id)
+    applications_by_date = _applications_by_local_date(applications)
     today = local_date(utc_now())
     calculated_at = utc_now()
     rows: list[CalculatedAdherenceDay] = []
@@ -135,11 +199,7 @@ def calculate_episode_adherence(
             continue
 
         for date_value in _iter_dates(range_start, range_end):
-            days_since_phase_start = (date_value - phase_start_date).days
-            is_due = days_since_phase_start % phase.apply_every_n_days == 0
-            expected = phase.applications_per_day if is_due else 0
-            completed = applications_by_date.get(date_value, 0)
-            credited = min(completed, expected)
+            expected, completed, credited = _adherence_counts_for_date(phase, history, applications, applications_by_date, date_value)
             rows.append(
                 CalculatedAdherenceDay(
                     account_id=episode.account_id,
@@ -151,7 +211,7 @@ def calculate_episode_adherence(
                     expected_applications=expected,
                     completed_applications=completed,
                     credited_applications=credited,
-                    status=_status_for(date_value, expected, completed, today),
+                    status=_status_for(date_value, expected, credited, today),
                     calculated_at=calculated_at,
                 )
             )
