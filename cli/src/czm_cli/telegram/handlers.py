@@ -7,7 +7,7 @@ import shlex
 
 from telegram.error import BadRequest
 
-from czm_cli.errors import CzmError, EXIT_AUTH, EXIT_CONFLICT, EXIT_NOT_FOUND, EXIT_USAGE
+from czm_cli.errors import CzmError, EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE
 from czm_cli.telegram import formatting
 from czm_cli.telegram.heatmap import build_heatmap_grid, render_heatmap_png
 from czm_cli.telegram.commands import TelegramCommandContext
@@ -408,20 +408,6 @@ def _format_due_prompt(item: dict) -> str:
 
 def _format_subject_delete_error(exc: CzmError) -> str:
     status_code = getattr(exc, "status_code", None)
-    if status_code == 409 or exc.exit_code == EXIT_CONFLICT:
-        lines = [
-            "Subject cannot be deleted because it has related episodes or treatment history.",
-            "",
-            "To preserve medical history, delete/obsolete related episodes first if supported, or keep the subject.",
-        ]
-        detail = exc.message.strip()
-        duplicate_details = {
-            "subject has related episodes",
-            "subject has related episodes and cannot be deleted.",
-        }
-        if detail and detail.lower() not in duplicate_details:
-            lines.extend(["", f"Backend detail: {detail}"])
-        return "\n".join(lines)
     if status_code == 404 or exc.exit_code == EXIT_NOT_FOUND:
         return "Subject not found. It may already have been deleted."
     return formatting.backend_error_message(exc.message)

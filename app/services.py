@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, time, timedelta, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -16,6 +16,7 @@ from app.models import (
     AccountApiKey,
     BodyLocation,
     EczemaEpisode,
+    EpisodeDailyAdherence,
     EpisodeEvent,
     EpisodePhaseHistory,
     Subject,
@@ -116,13 +117,43 @@ def get_subject(db: Session, account: Account, subject_id: int) -> Subject:
 
 def delete_subject(db: Session, account: Account, subject_id: int) -> Subject:
     subject = get_subject(db, account, subject_id)
-    has_episodes = db.execute(
-        select(EczemaEpisode.id).where(EczemaEpisode.account_id == account.id, EczemaEpisode.subject_id == subject.id).limit(1)
-    ).first()
-    if has_episodes is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Subject has related episodes and cannot be deleted.")
-    db.delete(subject)
-    db.commit()
+    episode_ids = list(
+        db.execute(
+            select(EczemaEpisode.id).where(EczemaEpisode.account_id == account.id, EczemaEpisode.subject_id == subject.id)
+        ).scalars()
+    )
+    try:
+        if episode_ids:
+            db.execute(
+                delete(EpisodeDailyAdherence).where(
+                    EpisodeDailyAdherence.account_id == account.id,
+                    or_(
+                        EpisodeDailyAdherence.subject_id == subject.id,
+                        EpisodeDailyAdherence.episode_id.in_(episode_ids),
+                    ),
+                )
+            )
+            db.execute(delete(TreatmentApplication).where(TreatmentApplication.episode_id.in_(episode_ids)))
+            db.execute(delete(EpisodePhaseHistory).where(EpisodePhaseHistory.episode_id.in_(episode_ids)))
+            db.execute(delete(EpisodeEvent).where(EpisodeEvent.episode_id.in_(episode_ids)))
+            db.execute(
+                delete(EczemaEpisode).where(
+                    EczemaEpisode.account_id == account.id,
+                    EczemaEpisode.subject_id == subject.id,
+                )
+            )
+        else:
+            db.execute(
+                delete(EpisodeDailyAdherence).where(
+                    EpisodeDailyAdherence.account_id == account.id,
+                    EpisodeDailyAdherence.subject_id == subject.id,
+                )
+            )
+        db.delete(subject)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return subject
 
 

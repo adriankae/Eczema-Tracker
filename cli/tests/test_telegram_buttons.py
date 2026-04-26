@@ -407,15 +407,15 @@ def test_subject_delete_cancel_does_not_delete():
 
 
 def test_subject_delete_conflict_is_surfaced_with_recovery_actions():
-    ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("Subject has related episodes and cannot be deleted.", exit_code=EXIT_CONFLICT))
+    ctx, client, update = make_handler(allow_writes=True, delete_error=CzmError("unexpected conflict", exit_code=EXIT_CONFLICT))
     query = FakeQuery("subject:delete_confirm:1")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert ("DELETE", "/subjects/1", None) in client.requests
-    assert "Subject cannot be deleted because it has related episodes or treatment history." in query.edits[0][0]
-    assert "To preserve medical history" in query.edits[0][0]
+    assert query.edits[0][0] == "Zema request failed: unexpected conflict"
+    assert "Subject cannot be deleted because it has related episodes or treatment history." not in query.edits[0][0]
+    assert "To preserve medical history" not in query.edits[0][0]
     assert "Traceback" not in query.edits[0][0]
-    assert "Zema request failed" not in query.edits[0][0]
     labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
     assert labels == ["Subjects", "Open menu"]
 
@@ -426,7 +426,7 @@ def test_subject_delete_conflict_surfaces_specific_backend_detail():
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert ("DELETE", "/subjects/1", None) in client.requests
-    assert "Backend detail: subject is locked by retention policy" in query.edits[0][0]
+    assert query.edits[0][0] == "Zema request failed: subject is locked by retention policy"
 
 
 def test_subject_delete_not_found_is_surfaced_safely():
