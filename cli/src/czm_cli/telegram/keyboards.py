@@ -135,6 +135,16 @@ def start_duplicate_location_keyboard(location_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def start_location_conflict_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Choose another location", callback_data="epstart:locations")],
+            [InlineKeyboardButton("Create new location", callback_data="epstart:loc_new")],
+            [InlineKeyboardButton("Open menu", callback_data="menu:open")],
+        ]
+    )
+
+
 def start_image_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [

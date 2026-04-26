@@ -26,6 +26,7 @@ class FakeClient:
         self.locations = locations if locations is not None else [
             {"id": 2, "code": "left_elbow", "display_name": "Left elbow", "image": None},
             {"id": 5, "code": "right_cheekbone", "display_name": "Right cheekbone", "image": None},
+            {"id": 6, "code": "right_knee", "display_name": "Right knee", "image": None},
         ]
 
     def get(self, path, params=None):
@@ -41,6 +42,7 @@ class FakeClient:
                     {"id": 11, "subject_id": 1, "location_id": 2, "status": "in_taper", "current_phase_number": 2, "healed_at": "2026-04-01T00:00:00Z", "obsolete_at": None},
                     {"id": 12, "subject_id": 1, "location_id": 2, "status": "obsolete", "current_phase_number": 2, "healed_at": None, "obsolete_at": "2026-04-01T00:00:00Z"},
                     {"id": 13, "subject_id": 1, "location_id": 5, "status": "active_flare", "current_phase_number": 1, "healed_at": None, "obsolete_at": None},
+                    {"id": 14, "subject_id": 1, "location_id": 6, "status": "healed", "current_phase_number": 2, "healed_at": "2026-04-02T00:00:00Z", "obsolete_at": None},
                 ]
             }
         raise AssertionError(path)
@@ -169,13 +171,18 @@ def test_start_episode_existing_subject_location_skip_image_creates_episode():
     query = callback(ctx, update, "menu:start_episode")
     assert "Using subject: Child A" in query.edits[0][0]
     assert "Choose a location" in query.edits[0][0]
-    query = callback(ctx, update, "epstart:loc:2")
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert "Left elbow" in labels
+    assert "Right knee" in labels
+    assert "Create new location" in labels
+    assert not any("Episode" in label or "#10" in label or "#14" in label for label in labels)
+    query = callback(ctx, update, "epstart:loc:6")
     assert "Add or replace" in query.edits[0][0]
     query = callback(ctx, update, "epstart:skip_image")
     assert "Create episode" in query.edits[0][0]
     query = callback(ctx, update, "epstart:confirm")
     assert "Created episode 20" in query.edits[0][0]
-    assert ("POST", "/episodes", {"subject_id": 1, "location_id": 2, "protocol_version": "v1"}) in client.requests
+    assert ("POST", "/episodes", {"subject_id": 1, "location_id": 6, "protocol_version": "v1"}) in client.requests
 
 
 def test_start_episode_multiple_subjects_still_shows_subject_buttons():
@@ -195,13 +202,21 @@ def test_start_episode_zero_subjects_prompts_create_subject():
     assert labels == ["Create new subject"]
 
 
+def test_start_episode_no_locations_goes_directly_to_create_location():
+    ctx, _client, update = make_ctx(locations=[])
+    query = callback(ctx, update, "menu:start_episode")
+    assert query.edits[0][0] == "Using subject: Child A.\nNo locations exist yet. Send the new location display name."
+    message = text(ctx, "New ankle")
+    assert "Add or replace" in message.replies[0][0]
+
+
 def test_start_episode_create_subject_and_location_flow():
     ctx, client, update = make_ctx()
     callback(ctx, update, "menu:start_episode")
     callback(ctx, update, "epstart:loc_new")
-    message = text(ctx, "Right knee")
+    message = text(ctx, "Left ankle")
     assert "Add or replace" in message.replies[0][0]
-    assert ("POST", "/locations", {"code": "right_knee", "display_name": "Right knee"}) in client.requests
+    assert ("POST", "/locations", {"code": "left_ankle", "display_name": "Left ankle"}) in client.requests
 
 
 def test_start_episode_create_subject_then_location_flow():
@@ -228,7 +243,87 @@ def test_start_episode_duplicate_created_location_can_use_existing_location():
     assert not any(request == ("POST", "/locations", {"code": "left_elbow", "display_name": "Left elbow"}) for request in client.requests)
 
     query = callback(ctx, update, "epstart:loc:2")
-    assert "Add or replace" in query.edits[0][0]
+    assert "already an active episode" in query.edits[0][0]
+
+
+def test_start_episode_blocks_active_location_without_showing_episode_choices():
+    ctx, client, update = make_ctx()
+    query = callback(ctx, update, "menu:start_episode")
+    assert "Episode 10" not in query.edits[0][0]
+    query = callback(ctx, update, "epstart:loc:2")
+    assert "There is already an active episode for Left elbow." in query.edits[0][0]
+    assert "Use Due now, Heal, or Relapse" in query.edits[0][0]
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert labels == ["Choose another location", "Create new location", "Open menu"]
+    assert not any(request[0] == "POST" and request[1] == "/episodes" for request in client.requests)
+
+
+def test_start_episode_duplicate_check_uses_status_before_stale_healed_at():
+    ctx, _client, update = make_ctx()
+    callback(ctx, update, "menu:start_episode")
+    query = callback(ctx, update, "epstart:loc:2")
+    assert "already an active episode" in query.edits[0][0]
+
+
+def test_start_episode_duplicate_check_allows_healed_and_obsolete_statuses():
+    ctx, client, update = make_ctx(
+        locations=[
+            {"id": 7, "code": "old_elbow", "display_name": "Old elbow", "image": None},
+            {"id": 8, "code": "old_knee", "display_name": "Old knee", "image": None},
+        ]
+    )
+    client.get = lambda path, params=None: {
+        "/subjects": {"subjects": [{"id": 1, "display_name": "Child A"}]},
+        "/locations": {
+            "locations": [
+                {"id": 7, "code": "old_elbow", "display_name": "Old elbow", "image": None},
+                {"id": 8, "code": "old_knee", "display_name": "Old knee", "image": None},
+            ]
+        },
+        "/episodes": {
+            "episodes": [
+                {"id": 21, "subject_id": 1, "location_id": 7, "status": "healed", "healed_at": None, "obsolete_at": None},
+                {"id": 22, "subject_id": 1, "location_id": 8, "status": "obsolete", "healed_at": None, "obsolete_at": "2026-04-01T00:00:00Z"},
+            ]
+        },
+    }[path]
+    callback(ctx, update, "menu:start_episode")
+    assert "Add or replace" in callback(ctx, update, "epstart:loc:7").edits[0][0]
+    callback(ctx, update, "epstart:locations")
+    assert "Add or replace" in callback(ctx, update, "epstart:loc:8").edits[0][0]
+
+
+def test_start_episode_missing_status_blocks_unless_clearly_ended():
+    ctx, client, update = make_ctx(
+        locations=[
+            {"id": 7, "code": "unknown_elbow", "display_name": "Unknown elbow", "image": None},
+            {"id": 8, "code": "healed_knee", "display_name": "Healed knee", "image": None},
+            {"id": 9, "code": "obsolete_ankle", "display_name": "Obsolete ankle", "image": None},
+        ]
+    )
+    client.get = lambda path, params=None: {
+        "/subjects": {"subjects": [{"id": 1, "display_name": "Child A"}]},
+        "/locations": {
+            "locations": [
+                {"id": 7, "code": "unknown_elbow", "display_name": "Unknown elbow", "image": None},
+                {"id": 8, "code": "healed_knee", "display_name": "Healed knee", "image": None},
+                {"id": 9, "code": "obsolete_ankle", "display_name": "Obsolete ankle", "image": None},
+            ]
+        },
+        "/episodes": {
+            "episodes": [
+                {"id": 31, "subject_id": 1, "location_id": 7},
+                {"id": 32, "subject_id": 1, "location_id": 8, "healed_at": "2026-04-01T00:00:00Z"},
+                {"id": 33, "subject_id": 1, "location_id": 9, "obsolete_at": "2026-04-01T00:00:00Z"},
+            ]
+        },
+    }[path]
+    callback(ctx, update, "menu:start_episode")
+    assert "already an active episode" in callback(ctx, update, "epstart:loc:7").edits[0][0]
+    callback(ctx, update, "epstart:locations")
+    assert "Add or replace" in callback(ctx, update, "epstart:loc:8").edits[0][0]
+    callback(ctx, update, "epstart:locations")
+    assert "Add or replace" in callback(ctx, update, "epstart:loc:9").edits[0][0]
 
 
 def test_location_code_from_display_name_rules():
@@ -241,13 +336,12 @@ def test_location_code_from_display_name_rules():
 def test_start_episode_photo_upload_continues_to_confirmation():
     ctx, client, update = make_ctx()
     callback(ctx, update, "menu:start_episode")
-    callback(ctx, update, "epstart:subject:1")
-    callback(ctx, update, "epstart:loc:2")
+    callback(ctx, update, "epstart:loc:6")
     callback(ctx, update, "epstart:image")
     message = FakeMessage(photo=[FakePhoto()])
     photo_update = Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=message)
     run(handle_photo(photo_update, None, ctx))
-    assert client.uploads[0][0] == "/locations/2/image"
+    assert client.uploads[0][0] == "/locations/6/image"
     assert "Create episode" in message.replies[0][0]
 
 

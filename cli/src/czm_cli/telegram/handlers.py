@@ -27,6 +27,7 @@ from czm_cli.telegram.keyboards import (
     start_confirm_keyboard,
     start_duplicate_location_keyboard,
     start_image_keyboard,
+    start_location_conflict_keyboard,
     start_location_keyboard,
     start_subject_keyboard,
     subject_delete_confirm_keyboard,
@@ -246,7 +247,7 @@ def _start_episode_subject_step(handler_ctx: TelegramHandlerContext, update) -> 
         subject = subjects[0]
         flow = {"subject_id": subject["id"], "subject_name": subject.get("display_name", f"subject {subject['id']}")}
         _set_state(update, handler_ctx, "start_episode", flow)
-        location_text, keyboard = _start_episode_location_step(handler_ctx)
+        location_text, keyboard = _start_episode_location_step(handler_ctx, update, flow)
         return f"Using subject: {flow['subject_name']}.\n{location_text}", keyboard
     if not subjects:
         return "Start episode: create a subject first.", start_subject_keyboard(subjects, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
@@ -270,13 +271,26 @@ def _handle_start_episode_callback(data: str, handler_ctx: TelegramHandlerContex
         subject = _find_by_id(handler_ctx.command_context.client.get("/subjects").get("subjects", []), subject_id)
         flow.update({"subject_id": subject_id, "subject_name": subject.get("display_name", f"subject {subject_id}")})
         _set_state(update, handler_ctx, "start_episode", flow)
-        return _start_episode_location_step(handler_ctx)
+        return _start_episode_location_step(handler_ctx, update, flow)
+    if data == "epstart:locations":
+        _set_state(update, handler_ctx, "start_episode", flow)
+        return _start_episode_location_step(handler_ctx, update, flow)
     if data == "epstart:loc_new":
         _set_state(update, handler_ctx, "start_episode_location_display", flow)
         return "Send the new location display name.", None
     if data.startswith("epstart:loc:"):
         location_id = int(data.rsplit(":", 1)[1])
         location = _find_by_id(handler_ctx.command_context.client.get("/locations").get("locations", []), location_id)
+        if _active_episode_for_start_location(handler_ctx, flow, location_id) is not None:
+            return (
+                "\n".join(
+                    [
+                        f"There is already an active episode for {location.get('display_name', f'location {location_id}')}.",
+                        "Use Due now, Heal, or Relapse for the existing episode, or choose/create a different location.",
+                    ]
+                ),
+                start_location_conflict_keyboard(),
+            )
         flow.update(
             {
                 "location_id": location_id,
@@ -305,10 +319,38 @@ def _handle_start_episode_callback(data: str, handler_ctx: TelegramHandlerContex
     return "Unknown or stale button. Tap /menu to start again.", None
 
 
-def _start_episode_location_step(handler_ctx: TelegramHandlerContext) -> tuple[str, object | None]:
+def _start_episode_location_step(handler_ctx: TelegramHandlerContext, update=None, flow: dict | None = None) -> tuple[str, object | None]:
     payload = handler_ctx.command_context.client.get("/locations")
     locations = payload.get("locations", [])
+    if not locations:
+        if update is not None:
+            _set_state(update, handler_ctx, "start_episode_location_display", flow or {})
+        return "No locations exist yet. Send the new location display name.", None
     return "Choose a location.", start_location_keyboard(locations, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
+
+
+def _active_episode_for_start_location(handler_ctx: TelegramHandlerContext, flow: dict, location_id: int) -> dict | None:
+    subject_id = flow.get("subject_id")
+    if subject_id is None:
+        return None
+    episodes = handler_ctx.command_context.client.get("/episodes").get("episodes", [])
+    for episode in episodes:
+        if int(episode.get("subject_id", -1)) != int(subject_id) or int(episode.get("location_id", -1)) != int(location_id):
+            continue
+        if _episode_blocks_new_start(episode):
+            return episode
+    return None
+
+
+def _episode_blocks_new_start(episode: dict) -> bool:
+    status = episode.get("status")
+    if status:
+        return status not in {"obsolete", "healed"}
+    if episode.get("obsolete_at"):
+        return False
+    if episode.get("healed_at"):
+        return False
+    return True
 
 
 def _location_code_from_display_name(display_name: str) -> str | None:
@@ -536,7 +578,7 @@ async def handle_guided_text(update, context, handler_ctx: TelegramHandlerContex
             flow = dict(state.data)
             flow.update({"subject_id": subject["id"], "subject_name": subject["display_name"]})
             handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode", flow)
-            location_text, keyboard = _start_episode_location_step(handler_ctx)
+            location_text, keyboard = _start_episode_location_step(handler_ctx, update, flow)
             await message.reply_text(location_text, reply_markup=keyboard)
             return True
         if state.name == "start_episode_location_display":
