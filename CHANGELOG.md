@@ -20,6 +20,18 @@
 - Added Telegram reminder config commands and environment variable overrides.
 - Added location-image confirmation prompts for heal and relapse workflows.
 - Added Telegram adherence heatmap images for summary range buttons.
+- Added persistent Docker Compose deployment support with restart policies for `postgres`, `zema-be`, and `zema-telegram`.
+- Added a named `zema-postgres-data` Docker volume for PostgreSQL persistence while preserving `zema-location-images`.
+- Added `.env.example` for Docker Compose Telegram/API secret configuration.
+- Added Telegram subject deletion from the button-guided Subjects flow.
+
+### Changed
+
+- Renamed the Telegram button label from `Due today` to `Due now` while preserving `/due` and stale `Due today` keyboard compatibility.
+- Changed `DELETE /subjects/{subject_id}` to destructively remove subject-owned medical data instead of blocking subjects with episodes.
+- Changed Telegram due/log treatment UX to use location-first due prompts with direct `Log application` actions.
+- Changed phase-1 due logic to use morning/evening slots anchored to the current active phase start, including relapse-day behavior.
+- Changed relapsed active-flare episodes so they can be healed again and become due immediately when appropriate.
 
 ### Security
 
@@ -28,6 +40,7 @@
 - Added allowlisted Telegram command/button dispatch instead of arbitrary shell execution.
 - Added confirmation flows for state-changing episode actions.
 - Reminder delivery is restricted to configured allowed chats and respects Telegram write-permission settings.
+- Subject deletion remains account-scoped and deletes only subject-owned data; shared body locations, taper phases, account data, API keys, and other subjects remain untouched.
 
 ### Notes
 
@@ -35,6 +48,8 @@
 - Backend remains the source of truth.
 - No LLM integration is required for Telegram bot usage.
 - Telegram reminders use `/episodes/due`; snooze state is in-memory and resets on bot restart.
+- Docker reboot persistence requires Docker itself to start on boot; Compose uses named volumes for database and location-image data.
+- Subject deletion in 0.3.0 is intentionally destructive for that subject's medical history.
 - Existing `zema setup`, `czm` compatibility, `CZM_*` variables, and `~/.config/czm/config.toml` remain supported.
 
 ## 0.2.0
