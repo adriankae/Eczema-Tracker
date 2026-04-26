@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
+from io import BytesIO
 import shlex
 
 from telegram.error import BadRequest
 
 from czm_cli.errors import CzmError, EXIT_AUTH, EXIT_USAGE
 from czm_cli.telegram import formatting
+from czm_cli.telegram.heatmap import build_heatmap_grid, render_heatmap_png
 from czm_cli.telegram.commands import TelegramCommandContext
 from czm_cli.telegram.keyboards import (
     adherence_rebuild_confirm_keyboard,
@@ -53,6 +55,9 @@ async def handle_callback(update, context, handler_ctx: TelegramHandlerContext) 
         ensure_allowed(handler_ctx.command_context.config.telegram, identity_from_update(update))
         if (query.data or "") in {"menu:due", "menu:log_treatment"}:
             await _send_due_prompts(update, context, handler_ctx)
+            return
+        if (query.data or "").startswith("adh:summary:"):
+            await _send_adherence_summary_heatmap(update, handler_ctx)
             return
         if (query.data or "").startswith(("heal:select:", "relapse:select:")):
             ensure_writes_allowed(handler_ctx.command_context.config.telegram)
@@ -183,10 +188,7 @@ def _handle_adherence_callback(data: str, handler_ctx: TelegramHandlerContext) -
         return formatting.format_adherence_rebuild(payload), None
     _, mode, days_text = data.split(":")
     days = int(days_text)
-    today = local_today(handler_ctx.command_context.config.timezone)
-    from_date = (today - timedelta(days=days - 1)).isoformat()
-    to_date = today.isoformat()
-    params = {"from": from_date, "to": to_date}
+    params = _adherence_range_params(handler_ctx, days)
     if mode == "summary":
         return formatting.format_adherence_summary(handler_ctx.command_context.client.get("/adherence/summary", params=params))
     if mode == "calendar":
@@ -194,6 +196,38 @@ def _handle_adherence_callback(data: str, handler_ctx: TelegramHandlerContext) -
     if mode == "missed":
         return formatting.format_adherence_days(handler_ctx.command_context.client.get("/adherence/missed", params=params), title="Missed adherence days")
     raise CzmError("Unsupported adherence action", exit_code=EXIT_USAGE)
+
+
+def _adherence_range_params(handler_ctx: TelegramHandlerContext, days: int) -> dict[str, str]:
+    today = local_today(handler_ctx.command_context.config.timezone)
+    from_date = (today - timedelta(days=days - 1)).isoformat()
+    return {"from": from_date, "to": today.isoformat()}
+
+
+async def _send_adherence_summary_heatmap(update, handler_ctx: TelegramHandlerContext) -> None:
+    query = update.callback_query
+    data = query.data or ""
+    days = int(data.rsplit(":", 1)[1])
+    params = _adherence_range_params(handler_ctx, days)
+    client = handler_ctx.command_context.client
+    summary = client.get("/adherence/summary", params=params)
+    await safe_edit_callback_message(query, formatting.format_adherence_summary(summary))
+    try:
+        calendar = client.get("/adherence/calendar", params=params)
+        subjects = client.get("/subjects")
+        locations = client.get("/locations")
+        grid = build_heatmap_grid(
+            calendar,
+            subjects,
+            locations,
+            from_date=date.fromisoformat(params["from"]),
+            to_date=date.fromisoformat(params["to"]),
+        )
+        image = BytesIO(render_heatmap_png(grid))
+        image.name = f"zema-adherence-heatmap-{days}d.png"
+        await query.message.reply_photo(photo=image, caption=f"Adherence heatmap - last {days} days")
+    except Exception:
+        return
 
 
 def _start_episode_subject_step(handler_ctx: TelegramHandlerContext, update) -> tuple[str, object | None]:

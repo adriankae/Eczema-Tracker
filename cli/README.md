@@ -220,7 +220,7 @@ Guided workflows include:
 - Set/replace a location image by sending a Telegram photo.
 - Log applications from Due now prompts.
 - Heal or relapse an episode after confirmation.
-- View adherence summary/calendar/missed days.
+- View adherence summary/calendar/missed days, with heatmap images for Telegram summary buttons.
 - Rebuild adherence snapshots when explicitly enabled.
 - Receive morning/evening due reminders with optional location images.
 

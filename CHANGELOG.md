@@ -19,6 +19,7 @@
 - Added reminder prompts with optional location images, quick log buttons, snooze, and open-menu actions.
 - Added Telegram reminder config commands and environment variable overrides.
 - Added location-image confirmation prompts for heal and relapse workflows.
+- Added Telegram adherence heatmap images for summary range buttons.
 
 ### Security
 

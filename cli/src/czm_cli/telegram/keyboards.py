@@ -163,6 +163,7 @@ def adherence_keyboard(*, allow_rebuild: bool) -> InlineKeyboardMarkup:
             InlineKeyboardButton("Summary 7 days", callback_data="adh:summary:7"),
             InlineKeyboardButton("Summary 30 days", callback_data="adh:summary:30"),
         ],
+        [InlineKeyboardButton("Summary 90 days", callback_data="adh:summary:90")],
         [
             InlineKeyboardButton("Calendar 30 days", callback_data="adh:calendar:30"),
             InlineKeyboardButton("Missed 30 days", callback_data="adh:missed:30"),

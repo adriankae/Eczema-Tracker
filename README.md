@@ -340,7 +340,7 @@ Guided workflows include:
 - Log due treatment.
 - Heal episode.
 - Relapse episode.
-- View adherence summary, calendar, and missed days.
+- View adherence summary, calendar, missed days, and Telegram heatmap images for summary ranges.
 - Rebuild adherence snapshots when `allow_adherence_rebuild=true`.
 
 Reminder behavior:
@@ -443,6 +443,7 @@ Schedule and scoring:
 - `credited_applications = min(completed_applications, expected_applications)`.
 - Score is `sum(credited_applications) / sum(expected_applications)`.
 - If there are no expected applications, `adherence_score` is `null`.
+- Telegram summary buttons also send a heatmap image: columns are dates, rows are location-first episode labels, colors represent completed/partial/missed/not-due/future, and 7/30 day views annotate cells as credited/expected.
 
 Examples:
 

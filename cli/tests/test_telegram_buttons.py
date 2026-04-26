@@ -5,6 +5,7 @@ import asyncio
 from czm_cli.config import AppConfig, TelegramConfig
 from czm_cli.errors import CzmError, EXIT_CONFLICT, EXIT_NOT_FOUND
 from czm_cli.telegram.commands import TelegramCommandContext
+from czm_cli.telegram import handlers as handlers_module
 from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text, handle_text_message
 from czm_cli.telegram.runtime import TelegramRuntime, build_application
 from czm_cli.telegram.state import ConversationStore
@@ -32,6 +33,22 @@ class FakeClient:
             return {"locations": [{"id": 2, "code": "left_elbow", "display_name": "Left elbow"}]}
         if path == "/adherence/summary":
             return {"from": "2026-04-01", "to": "2026-04-30", "expected_applications": 10, "credited_applications": 8, "adherence_score": 0.8, "missed_days": 2}
+        if path == "/adherence/calendar":
+            return {
+                "days": [
+                    {
+                        "date": "2026-04-01",
+                        "episode_id": 12,
+                        "subject_id": 1,
+                        "location_id": 2,
+                        "phase_number": 1,
+                        "expected_applications": 1,
+                        "completed_applications": 1,
+                        "credited_applications": 1,
+                        "status": "completed",
+                    }
+                ]
+            }
         raise AssertionError(path)
 
     def delete(self, path, json=None, params=None):
@@ -265,6 +282,55 @@ def test_write_callback_rejected_when_disabled():
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert "disabled" in query.edits[0][0]
+
+
+def test_adherence_menu_includes_summary_90_days():
+    ctx, _client, update = make_handler()
+    query = FakeQuery("menu:adherence")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert "Summary 90 days" in labels
+
+
+def test_adherence_summary_sends_text_and_heatmap(monkeypatch):
+    ctx, client, update = make_handler()
+    monkeypatch.setattr(handlers_module, "render_heatmap_png", lambda grid: b"png-bytes")
+    query = FakeQuery("adh:summary:30")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Adherence" in query.edits[0][0]
+    assert query.message.replies[0][0] == "Adherence heatmap - last 30 days"
+    assert query.message.replies[0][2].getvalue() == b"png-bytes"
+    assert ("GET", "/adherence/summary", {"from": "2026-03-28", "to": "2026-04-26"}) in client.requests
+    assert any(request[0:2] == ("GET", "/adherence/calendar") for request in client.requests)
+
+
+def test_adherence_summary_still_sends_text_when_heatmap_render_fails(monkeypatch):
+    ctx, _client, update = make_handler()
+    def fail_render(grid):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(handlers_module, "render_heatmap_png", fail_render)
+    query = FakeQuery("adh:summary:30")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Adherence" in query.edits[0][0]
+    assert query.message.replies == []
+
+
+def test_adherence_summary_still_sends_text_when_photo_send_fails(monkeypatch):
+    class FailingPhotoMessage(FakeMessage):
+        async def reply_photo(self, **kwargs):
+            raise RuntimeError("telegram failed")
+
+    ctx, _client, update = make_handler()
+    monkeypatch.setattr(handlers_module, "render_heatmap_png", lambda grid: b"png-bytes")
+    query = FakeQuery("adh:summary:30")
+    query.message = FailingPhotoMessage()
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Adherence" in query.edits[0][0]
+    assert query.message.replies == []
 
 
 def test_subject_create_guided_flow():

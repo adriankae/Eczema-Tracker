@@ -154,7 +154,7 @@ Locations
 Subjects
 ```
 
-Button-guided workflows support starting episodes, creating/deleting subjects, creating locations, setting location images from Telegram photos, logging due treatments, healing/relapsing episodes with confirmation, adherence views, and adherence rebuild when explicitly enabled.
+Button-guided workflows support starting episodes, creating/deleting subjects, creating locations, setting location images from Telegram photos, logging due treatments, healing/relapsing episodes with confirmation, adherence views with summary heatmap images, and adherence rebuild when explicitly enabled.
 
 Reminder behavior:
 
