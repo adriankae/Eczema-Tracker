@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 from io import BytesIO
+import re
 import shlex
 
 from telegram.error import BadRequest
@@ -24,6 +25,7 @@ from czm_cli.telegram.keyboards import (
     main_menu_keyboard,
     main_menu_reply_keyboard,
     start_confirm_keyboard,
+    start_duplicate_location_keyboard,
     start_image_keyboard,
     start_location_keyboard,
     start_subject_keyboard,
@@ -135,8 +137,8 @@ def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -
         return formatting.format_locations(payload), locations_keyboard(payload.get("locations", []), allow_writes=config.telegram.allow_writes)
     if data == "loc:create":
         ensure_writes_allowed(config.telegram)
-        _set_state(update, handler_ctx, "create_location_code")
-        return "Send the location code, for example left_elbow.", None
+        _set_state(update, handler_ctx, "create_location_display")
+        return "Send the location display name.", None
     if data.startswith("loc:select:"):
         location_id = int(data.rsplit(":", 1)[1])
         return f"Location {location_id}", location_actions_keyboard(location_id, allow_writes=config.telegram.allow_writes)
@@ -240,6 +242,14 @@ def _start_episode_subject_step(handler_ctx: TelegramHandlerContext, update) -> 
     _set_state(update, handler_ctx, "start_episode", {})
     payload = handler_ctx.command_context.client.get("/subjects")
     subjects = payload.get("subjects", [])
+    if len(subjects) == 1:
+        subject = subjects[0]
+        flow = {"subject_id": subject["id"], "subject_name": subject.get("display_name", f"subject {subject['id']}")}
+        _set_state(update, handler_ctx, "start_episode", flow)
+        location_text, keyboard = _start_episode_location_step(handler_ctx)
+        return f"Using subject: {flow['subject_name']}.\n{location_text}", keyboard
+    if not subjects:
+        return "Start episode: create a subject first.", start_subject_keyboard(subjects, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
     return "Start episode: choose a subject.", start_subject_keyboard(subjects, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
 
 
@@ -262,8 +272,8 @@ def _handle_start_episode_callback(data: str, handler_ctx: TelegramHandlerContex
         _set_state(update, handler_ctx, "start_episode", flow)
         return _start_episode_location_step(handler_ctx)
     if data == "epstart:loc_new":
-        _set_state(update, handler_ctx, "start_episode_location_code", flow)
-        return "Send the new location code, for example left_elbow.", None
+        _set_state(update, handler_ctx, "start_episode_location_display", flow)
+        return "Send the new location display name.", None
     if data.startswith("epstart:loc:"):
         location_id = int(data.rsplit(":", 1)[1])
         location = _find_by_id(handler_ctx.command_context.client.get("/locations").get("locations", []), location_id)
@@ -299,6 +309,26 @@ def _start_episode_location_step(handler_ctx: TelegramHandlerContext) -> tuple[s
     payload = handler_ctx.command_context.client.get("/locations")
     locations = payload.get("locations", [])
     return "Choose a location.", start_location_keyboard(locations, allow_writes=handler_ctx.command_context.config.telegram.allow_writes)
+
+
+def _location_code_from_display_name(display_name: str) -> str | None:
+    value = display_name.strip().lower()
+    value = value.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue").replace("ß", "ss")
+    value = re.sub(r"[^a-z0-9]+", "_", value)
+    value = re.sub(r"_+", "_", value).strip("_")
+    return value or None
+
+
+def _find_location_by_code(handler_ctx: TelegramHandlerContext, code: str) -> dict | None:
+    locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
+    return next((location for location in locations if location.get("code") == code), None)
+
+
+def _duplicate_location_message(code: str, location: dict) -> str:
+    return (
+        f'A location with code {code} already exists: {location.get("display_name", code)}.\n'
+        "Please use the existing location or choose a different display name."
+    )
 
 
 def _start_episode_image_step(flow: dict) -> tuple[str, object | None]:
@@ -484,12 +514,18 @@ async def handle_guided_text(update, context, handler_ctx: TelegramHandlerContex
             _clear_state(handler_ctx, identity)
             await message.reply_text(formatting.format_subject_created(payload))
             return True
-        if state.name == "create_location_code":
-            handler_ctx.state.set(identity.chat_id, identity.user_id, "create_location_display", {"code": text})
-            await message.reply_text("Send the location display name.")
-            return True
         if state.name == "create_location_display":
-            payload = handler_ctx.command_context.client.post("/locations", json={"code": state.data["code"], "display_name": text})
+            code = _location_code_from_display_name(text)
+            if code is None:
+                await message.reply_text("Location display name must include at least one letter or number.")
+                return True
+            duplicate = _find_location_by_code(handler_ctx, code)
+            if duplicate is not None:
+                _clear_state(handler_ctx, identity)
+                locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
+                await message.reply_text(_duplicate_location_message(code, duplicate), reply_markup=locations_keyboard(locations, allow_writes=True))
+                return True
+            payload = handler_ctx.command_context.client.post("/locations", json={"code": code, "display_name": text})
             location_id = payload["location"]["id"]
             handler_ctx.state.set(identity.chat_id, identity.user_id, "created_location", {"location_id": location_id})
             await message.reply_text(formatting.format_location_created(payload) + "\nAdd an image?", reply_markup=location_image_prompt_keyboard(location_id))
@@ -503,15 +539,18 @@ async def handle_guided_text(update, context, handler_ctx: TelegramHandlerContex
             location_text, keyboard = _start_episode_location_step(handler_ctx)
             await message.reply_text(location_text, reply_markup=keyboard)
             return True
-        if state.name == "start_episode_location_code":
-            flow = dict(state.data)
-            flow["location_code"] = text
-            handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode_location_display", flow)
-            await message.reply_text("Send the new location display name.")
-            return True
         if state.name == "start_episode_location_display":
             flow = dict(state.data)
-            payload = handler_ctx.command_context.client.post("/locations", json={"code": flow["location_code"], "display_name": text})
+            code = _location_code_from_display_name(text)
+            if code is None:
+                await message.reply_text("Location display name must include at least one letter or number.")
+                return True
+            duplicate = _find_location_by_code(handler_ctx, code)
+            if duplicate is not None:
+                handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode", flow)
+                await message.reply_text(_duplicate_location_message(code, duplicate), reply_markup=start_duplicate_location_keyboard(int(duplicate["id"])))
+                return True
+            payload = handler_ctx.command_context.client.post("/locations", json={"code": code, "display_name": text})
             location = payload["location"]
             flow.update({"location_id": location["id"], "location_name": location["display_name"], "location_has_image": bool(location.get("image"))})
             handler_ctx.state.set(identity.chat_id, identity.user_id, "start_episode", flow)

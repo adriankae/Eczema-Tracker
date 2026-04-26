@@ -7,26 +7,33 @@ from telegram.error import BadRequest
 
 from czm_cli.config import AppConfig, TelegramConfig
 from czm_cli.telegram.commands import TelegramCommandContext
-from czm_cli.telegram.handlers import TelegramHandlerContext, handle_callback, handle_guided_text, handle_photo, safe_edit_callback_message
+from czm_cli.telegram.handlers import (
+    TelegramHandlerContext,
+    _location_code_from_display_name,
+    handle_callback,
+    handle_guided_text,
+    handle_photo,
+    safe_edit_callback_message,
+)
 from czm_cli.telegram.state import ConversationStore
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, *, subjects=None, locations=None):
         self.requests = []
         self.uploads = []
+        self.subjects = subjects if subjects is not None else [{"id": 1, "display_name": "Child A"}]
+        self.locations = locations if locations is not None else [
+            {"id": 2, "code": "left_elbow", "display_name": "Left elbow", "image": None},
+            {"id": 5, "code": "right_cheekbone", "display_name": "Right cheekbone", "image": None},
+        ]
 
     def get(self, path, params=None):
         self.requests.append(("GET", path, params))
         if path == "/subjects":
-            return {"subjects": [{"id": 1, "display_name": "Child A"}]}
+            return {"subjects": self.subjects}
         if path == "/locations":
-            return {
-                "locations": [
-                    {"id": 2, "code": "left_elbow", "display_name": "Left elbow", "image": None},
-                    {"id": 5, "code": "right_cheekbone", "display_name": "Right cheekbone", "image": None},
-                ]
-            }
+            return {"locations": self.locations}
         if path == "/episodes":
             return {
                 "episodes": [
@@ -127,7 +134,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_ctx(*, allow_writes=True, allow_rebuild=False, chat_id=123, user_id=1):
+def make_ctx(*, allow_writes=True, allow_rebuild=False, chat_id=123, user_id=1, subjects=None, locations=None):
     config = AppConfig(
         timezone="UTC",
         telegram=TelegramConfig(
@@ -137,7 +144,7 @@ def make_ctx(*, allow_writes=True, allow_rebuild=False, chat_id=123, user_id=1):
             allow_adherence_rebuild=allow_rebuild,
         ),
     )
-    client = FakeClient()
+    client = FakeClient(subjects=subjects, locations=locations)
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
     update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
     return ctx, client, update
@@ -160,8 +167,7 @@ def text(ctx, body):
 def test_start_episode_existing_subject_location_skip_image_creates_episode():
     ctx, client, update = make_ctx()
     query = callback(ctx, update, "menu:start_episode")
-    assert "choose a subject" in query.edits[0][0]
-    query = callback(ctx, update, "epstart:subject:1")
+    assert "Using subject: Child A" in query.edits[0][0]
     assert "Choose a location" in query.edits[0][0]
     query = callback(ctx, update, "epstart:loc:2")
     assert "Add or replace" in query.edits[0][0]
@@ -172,17 +178,64 @@ def test_start_episode_existing_subject_location_skip_image_creates_episode():
     assert ("POST", "/episodes", {"subject_id": 1, "location_id": 2, "protocol_version": "v1"}) in client.requests
 
 
+def test_start_episode_multiple_subjects_still_shows_subject_buttons():
+    ctx, _client, update = make_ctx(subjects=[{"id": 1, "display_name": "Child A"}, {"id": 2, "display_name": "Child B"}])
+    query = callback(ctx, update, "menu:start_episode")
+    assert "choose a subject" in query.edits[0][0]
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert "Child A" in labels
+    assert "Child B" in labels
+
+
+def test_start_episode_zero_subjects_prompts_create_subject():
+    ctx, _client, update = make_ctx(subjects=[])
+    query = callback(ctx, update, "menu:start_episode")
+    assert "create a subject first" in query.edits[0][0]
+    labels = [button.text for row in query.edits[0][1].inline_keyboard for button in row]
+    assert labels == ["Create new subject"]
+
+
 def test_start_episode_create_subject_and_location_flow():
     ctx, client, update = make_ctx()
     callback(ctx, update, "menu:start_episode")
-    callback(ctx, update, "epstart:subject_new")
-    text(ctx, "Child B")
     callback(ctx, update, "epstart:loc_new")
-    text(ctx, "right_knee")
     message = text(ctx, "Right knee")
     assert "Add or replace" in message.replies[0][0]
-    assert ("POST", "/subjects", {"display_name": "Child B"}) in client.requests
     assert ("POST", "/locations", {"code": "right_knee", "display_name": "Right knee"}) in client.requests
+
+
+def test_start_episode_create_subject_then_location_flow():
+    ctx, client, update = make_ctx(subjects=[])
+    callback(ctx, update, "menu:start_episode")
+    callback(ctx, update, "epstart:subject_new")
+    message = text(ctx, "Child B")
+    assert "Choose a location" in message.replies[0][0]
+    callback(ctx, update, "epstart:loc_new")
+    message = text(ctx, "Rechter Wangenknochen")
+    assert "Add or replace" in message.replies[0][0]
+    assert ("POST", "/subjects", {"display_name": "Child B"}) in client.requests
+    assert ("POST", "/locations", {"code": "rechter_wangenknochen", "display_name": "Rechter Wangenknochen"}) in client.requests
+
+
+def test_start_episode_duplicate_created_location_can_use_existing_location():
+    ctx, client, update = make_ctx()
+    callback(ctx, update, "menu:start_episode")
+    callback(ctx, update, "epstart:loc_new")
+    message = text(ctx, "Left elbow")
+    assert "already exists" in message.replies[0][0]
+    labels = [button.text for row in message.replies[0][1].inline_keyboard for button in row]
+    assert "Use existing location" in labels
+    assert not any(request == ("POST", "/locations", {"code": "left_elbow", "display_name": "Left elbow"}) for request in client.requests)
+
+    query = callback(ctx, update, "epstart:loc:2")
+    assert "Add or replace" in query.edits[0][0]
+
+
+def test_location_code_from_display_name_rules():
+    assert _location_code_from_display_name("Rechter Wangenknochen") == "rechter_wangenknochen"
+    assert _location_code_from_display_name("Hüfte groß") == "huefte_gross"
+    assert _location_code_from_display_name("Right cheekbone / jaw") == "right_cheekbone_jaw"
+    assert _location_code_from_display_name("   ") is None
 
 
 def test_start_episode_photo_upload_continues_to_confirmation():

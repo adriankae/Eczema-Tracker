@@ -125,6 +125,16 @@ def start_location_keyboard(locations: list[dict], *, allow_writes: bool) -> Inl
     return InlineKeyboardMarkup(rows) if rows else None
 
 
+def start_duplicate_location_keyboard(location_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("Use existing location", callback_data=f"epstart:loc:{location_id}")],
+            [InlineKeyboardButton("Choose another location", callback_data="epstart:loc_new")],
+            [InlineKeyboardButton("Cancel", callback_data="epstart:cancel")],
+        ]
+    )
+
+
 def start_image_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [

@@ -443,11 +443,31 @@ def test_create_location_guided_flow():
     query = FakeQuery("loc:create")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
-    msg1 = FakeMessage("right_knee")
-    assert run(handle_guided_text(Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=msg1), None, ctx)) is True
+    assert query.edits[0][0] == "Send the location display name."
     msg2 = FakeMessage("Right knee")
     assert run(handle_guided_text(Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=msg2), None, ctx)) is True
     assert ("POST", "/locations", {"code": "right_knee", "display_name": "Right knee"}) in client.requests
+
+
+def test_create_location_guided_flow_rejects_duplicate_code():
+    ctx, client, update = make_handler(allow_writes=True)
+    query = FakeQuery("loc:create")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    msg = FakeMessage("Left elbow")
+    assert run(handle_guided_text(Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=msg), None, ctx)) is True
+    assert "already exists" in msg.replies[0][0]
+    assert not any(request == ("POST", "/locations", {"code": "left_elbow", "display_name": "Left elbow"}) for request in client.requests)
+
+
+def test_create_location_guided_flow_rejects_empty_derived_code():
+    ctx, _client, update = make_handler(allow_writes=True)
+    query = FakeQuery("loc:create")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    msg = FakeMessage("!!!")
+    assert run(handle_guided_text(Obj(effective_chat=Obj(id=123), effective_user=Obj(id=1), effective_message=msg), None, ctx)) is True
+    assert "must include at least one letter or number" in msg.replies[0][0]
 
 
 def test_unknown_chat_callback_rejected():
