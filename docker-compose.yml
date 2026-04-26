@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: eczema
       POSTGRES_USER: eczema
@@ -12,11 +13,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    volumes:
+      - zema-postgres-data:/var/lib/postgresql/data
 
   zema-be:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://eczema:eczema@postgres:5432/eczema
       APP_ENV: local
@@ -53,6 +57,7 @@ services:
     build:
       context: .
       dockerfile: docker/cli.Dockerfile
+    restart: unless-stopped
     command: zema telegram run
     environment:
       CZM_BASE_URL: http://zema-be:28173
@@ -69,4 +74,5 @@ services:
       - telegram
 
 volumes:
+  zema-postgres-data:
   zema-location-images:

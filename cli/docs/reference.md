@@ -142,6 +142,41 @@ docker compose --profile telegram up -d zema-telegram
 docker compose logs -f zema-telegram
 ```
 
+Persistent Docker mode:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+nano .env
+docker compose --profile telegram up -d postgres zema-be zema-telegram
+docker compose ps
+docker compose logs --tail=100 zema-telegram
+curl -sS http://localhost:28173/health
+```
+
+Compose reads `CZM_API_KEY`, `CZM_TIMEZONE`, `ZEMA_TELEGRAM_BOT_TOKEN`, `ZEMA_TELEGRAM_ALLOWED_CHAT_IDS`, `ZEMA_TELEGRAM_ALLOWED_USER_IDS`, `ZEMA_TELEGRAM_ALLOW_WRITES`, and `ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD` from `.env` or the shell environment. Keep `.env` private and do not commit it.
+
+The persistent stack uses `restart: unless-stopped` for `postgres`, `zema-be`, and `zema-telegram`. If Docker is enabled on boot, the stack restarts after reboot. Database data persists in the `zema-postgres-data` named volume; uploaded location images persist in `zema-location-images`.
+
+To verify reboot persistence on Linux:
+
+```bash
+sudo systemctl enable docker
+sudo systemctl status docker
+sudo reboot
+```
+
+After reconnecting:
+
+```bash
+cd /srv/zema/Eczema-Tracker
+docker compose ps
+docker compose logs --tail=100 zema-telegram
+curl -sS http://localhost:28173/health
+```
+
+`docker compose down` keeps named volumes. `docker compose down -v` deletes named volumes and destroys Zema data.
+
 `zema telegram run` registers Telegram bot commands. `/start` and `/menu` show a button menu for common workflows, and private chats also receive a persistent reply keyboard:
 
 ```text

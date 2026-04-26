@@ -139,6 +139,87 @@ docker compose logs -f zema-telegram
 
 `zema-telegram` uses the CLI image, talks to `zema-be` over HTTP, and exposes no public ports.
 
+## Persistent Docker Deployment
+
+For a server that should survive reboots, run the Compose stack from a stable directory and keep secrets in a private `.env` file.
+
+Create a persistent server directory:
+
+```bash
+sudo mkdir -p /srv/zema
+sudo chown -R czmbot:czmbot /srv/zema
+sudo -iu czmbot
+cd /srv/zema
+git clone https://github.com/adriankae/Eczema-Tracker.git
+cd Eczema-Tracker
+```
+
+Create `.env` from the placeholder file:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+nano .env
+```
+
+Fill in at least:
+
+```env
+CZM_API_KEY=replace-with-your-zema-api-key
+CZM_TIMEZONE=Europe/Berlin
+ZEMA_TELEGRAM_BOT_TOKEN=replace-with-your-telegram-bot-token
+ZEMA_TELEGRAM_ALLOWED_CHAT_IDS=123456789
+ZEMA_TELEGRAM_ALLOWED_USER_IDS=
+ZEMA_TELEGRAM_ALLOW_WRITES=true
+ZEMA_TELEGRAM_ALLOW_ADHERENCE_REBUILD=false
+```
+
+Start the persistent backend and Telegram bot:
+
+```bash
+docker compose --profile telegram up -d postgres zema-be zema-telegram
+```
+
+Inspect the stack:
+
+```bash
+docker compose ps
+docker compose logs --tail=100 zema-be
+docker compose logs --tail=100 zema-telegram
+curl -sS http://localhost:28173/health
+```
+
+Ensure Docker starts on boot:
+
+```bash
+sudo systemctl enable docker
+sudo systemctl status docker
+```
+
+Reboot test:
+
+```bash
+sudo reboot
+```
+
+After reconnecting:
+
+```bash
+cd /srv/zema/Eczema-Tracker
+docker compose ps
+docker compose logs --tail=100 zema-telegram
+curl -sS http://localhost:28173/health
+```
+
+The long-running services use `restart: unless-stopped`, so Docker restarts them after reboot as long as Docker itself starts. Data persists in named Docker volumes:
+
+```text
+zema-postgres-data
+zema-location-images
+```
+
+Keep `.env` private. It contains secrets and should not be committed. Back up `.env`, the Postgres volume, and the location image volume. `docker compose down` stops containers but keeps named volumes; `docker compose down -v` deletes named volumes and destroys database/image data.
+
 ## Authentication And API Keys
 
 The local Docker Compose setup seeds a default account when the database is empty:

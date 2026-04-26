@@ -170,6 +170,34 @@ ZEMA_TELEGRAM_REMINDER_SEND_IMAGES
 
 The primary Telegram UX is button-driven. `zema telegram run` registers Telegram bot commands, `/start` and `/menu` show inline buttons, and private chats also get a persistent reply keyboard for starting episodes, logging treatments, checking due items, adherence, healing/relapsing episodes, locations, and subjects.
 
+## Persistent Docker Deployment
+
+For a reboot-persistent server deployment, copy `.env.example` to `.env`, restrict it, and start the profiled Telegram stack:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+nano .env
+
+docker compose --profile telegram up -d postgres zema-be zema-telegram
+docker compose ps
+docker compose logs --tail=100 zema-telegram
+curl -sS http://localhost:28173/health
+```
+
+Compose reads secrets such as `CZM_API_KEY`, `ZEMA_TELEGRAM_BOT_TOKEN`, and `ZEMA_TELEGRAM_ALLOWED_CHAT_IDS` from `.env`. Do not commit `.env`; `.env.example` contains placeholders only.
+
+The long-running `postgres`, `zema-be`, and `zema-telegram` services use `restart: unless-stopped`. If Docker is enabled on boot, they restart after a server reboot. Postgres data is stored in the `zema-postgres-data` named volume, and location images are stored in `zema-location-images`.
+
+On Linux hosts, enable Docker at boot:
+
+```bash
+sudo systemctl enable docker
+sudo systemctl status docker
+```
+
+`docker compose down` keeps named volumes. `docker compose down -v` deletes named volumes and destroys Zema database/image data.
+
 Reminder commands:
 
 ```bash
