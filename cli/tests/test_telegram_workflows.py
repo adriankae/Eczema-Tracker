@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 from telegram.error import BadRequest
+from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 from czm_cli.config import AppConfig, TelegramConfig
 from czm_cli.telegram.commands import TelegramCommandContext
@@ -137,7 +138,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_ctx(*, allow_writes=True, allow_rebuild=False, chat_id=123, user_id=1, subjects=None, locations=None):
+def make_ctx(*, allow_writes=True, allow_rebuild=False, chat_id=123, user_id=1, chat_type=None, subjects=None, locations=None):
     config = AppConfig(
         timezone="UTC",
         telegram=TelegramConfig(
@@ -149,7 +150,7 @@ def make_ctx(*, allow_writes=True, allow_rebuild=False, chat_id=123, user_id=1, 
     )
     client = FakeClient(subjects=subjects, locations=locations)
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
-    update = Obj(effective_chat=Obj(id=chat_id), effective_user=Obj(id=user_id))
+    update = Obj(effective_chat=Obj(id=chat_id, type=chat_type), effective_user=Obj(id=user_id))
     return ctx, client, update
 
 
@@ -168,7 +169,7 @@ def text(ctx, body):
 
 
 def test_start_episode_existing_subject_location_skip_image_creates_episode():
-    ctx, client, update = make_ctx()
+    ctx, client, update = make_ctx(chat_type="private")
     query = callback(ctx, update, "menu:start_episode")
     assert "Using subject: Child A" in query.edits[0][0]
     assert "Choose a location" in query.edits[0][0]
@@ -183,8 +184,42 @@ def test_start_episode_existing_subject_location_skip_image_creates_episode():
     query = callback(ctx, update, "epstart:skip_image")
     assert "Create episode" in query.edits[0][0]
     query = callback(ctx, update, "epstart:confirm")
-    assert "Created episode 20" in query.edits[0][0]
+    assert query.edits[0] == ("Episode created.", None)
+    assert "Created episode 20" in query.message.replies[0][0]
+    assert isinstance(query.message.replies[0][1], ReplyKeyboardMarkup)
+    labels = [button.text for row in query.message.replies[0][1].keyboard for button in row]
+    assert "Due now" in labels
+    assert ctx.state.get(123, 1) is None
     assert ("POST", "/episodes", {"subject_id": 1, "location_id": 6, "protocol_version": "v1"}) in client.requests
+
+
+def test_start_episode_group_creation_success_uses_inline_menu_keyboard():
+    ctx, client, update = make_ctx(chat_type="group")
+    callback(ctx, update, "menu:start_episode")
+    callback(ctx, update, "epstart:loc:6")
+    callback(ctx, update, "epstart:skip_image")
+    query = callback(ctx, update, "epstart:confirm")
+    assert query.edits[0] == ("Episode created.", None)
+    assert "Created episode 20" in query.message.replies[0][0]
+    assert isinstance(query.message.replies[0][1], InlineKeyboardMarkup)
+    labels = [button.text for row in query.message.replies[0][1].inline_keyboard for button in row]
+    assert "Due now" in labels
+    assert ("POST", "/episodes", {"subject_id": 1, "location_id": 6, "protocol_version": "v1"}) in client.requests
+
+
+def test_start_episode_stale_confirm_does_not_create_duplicate_episode():
+    ctx, client, update = make_ctx(chat_type="private")
+    callback(ctx, update, "menu:start_episode")
+    callback(ctx, update, "epstart:loc:6")
+    callback(ctx, update, "epstart:skip_image")
+    callback(ctx, update, "epstart:confirm")
+
+    second = callback(ctx, update, "epstart:confirm")
+
+    assert "flow expired" in second.edits[0][0]
+    assert [request for request in client.requests if request[0] == "POST" and request[1] == "/episodes"] == [
+        ("POST", "/episodes", {"subject_id": 1, "location_id": 6, "protocol_version": "v1"})
+    ]
 
 
 def test_start_episode_multiple_subjects_still_shows_subject_buttons():

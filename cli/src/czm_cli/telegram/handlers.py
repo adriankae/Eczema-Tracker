@@ -67,6 +67,10 @@ async def handle_callback(update, context, handler_ctx: TelegramHandlerContext) 
             ensure_writes_allowed(handler_ctx.command_context.config.telegram)
             await _send_episode_action_confirmation(update, context, handler_ctx, query.data or "")
             return
+        if (query.data or "") == "epstart:confirm":
+            ensure_writes_allowed(handler_ctx.command_context.config.telegram)
+            await _confirm_start_episode(update, handler_ctx)
+            return
         text, keyboard = _dispatch_callback(query.data or "", handler_ctx, update)
     except CzmError as exc:
         text, keyboard = (exc.message if exc.exit_code == EXIT_AUTH else formatting.backend_error_message(exc.message)), None
@@ -307,16 +311,31 @@ def _handle_start_episode_callback(data: str, handler_ctx: TelegramHandlerContex
         return f"Send a photo for {flow.get('location_name', 'this location')}.", None
     if data == "epstart:skip_image":
         return _start_episode_confirm_step(flow)
-    if data == "epstart:confirm":
-        if "subject_id" not in flow or "location_id" not in flow:
-            return EXPIRED_STATE_MESSAGE, None
-        payload = handler_ctx.command_context.client.post(
-            "/episodes",
-            json={"subject_id": flow["subject_id"], "location_id": flow["location_id"], "protocol_version": "v1"},
-        )
-        _clear_state(handler_ctx, identity)
-        return formatting.format_episode_created(payload), None
     return "Unknown or stale button. Tap /menu to start again.", None
+
+
+async def _confirm_start_episode(update, handler_ctx: TelegramHandlerContext) -> None:
+    query = update.callback_query
+    identity = identity_from_update(update)
+    state, expired = _get_state(handler_ctx, identity)
+    if expired or state is None or state.name != "start_episode":
+        await safe_edit_callback_message(query, EXPIRED_STATE_MESSAGE)
+        return
+    flow = dict(state.data)
+    if "subject_id" not in flow or "location_id" not in flow:
+        await safe_edit_callback_message(query, EXPIRED_STATE_MESSAGE)
+        return
+    payload = handler_ctx.command_context.client.post(
+        "/episodes",
+        json={"subject_id": flow["subject_id"], "location_id": flow["location_id"], "protocol_version": "v1"},
+    )
+    _clear_state(handler_ctx, identity)
+    await safe_edit_callback_message(query, "Episode created.", reply_markup=None)
+    await _send_terminal_success(update, formatting.format_episode_created(payload))
+
+
+async def _send_terminal_success(update, text: str) -> None:
+    await update.callback_query.message.reply_text(text, reply_markup=_reply_keyboard_for_update(update))
 
 
 def _start_episode_location_step(handler_ctx: TelegramHandlerContext, update=None, flow: dict | None = None) -> tuple[str, object | None]:
