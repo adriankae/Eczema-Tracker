@@ -460,7 +460,7 @@ async def _send_due_prompts(update, context, handler_ctx: TelegramHandlerContext
     message = query.message
     due_items = _enriched_due_items(handler_ctx)
     if not due_items:
-        await safe_edit_callback_message(query, "No treatments are due right now.", reply_markup=main_menu_keyboard())
+        await safe_edit_callback_message(query, "No treatments are due right now.")
         return
     limit = formatting.MAX_ROWS
     shown = due_items[:limit]
@@ -472,7 +472,7 @@ async def _send_due_prompts(update, context, handler_ctx: TelegramHandlerContext
 async def _send_due_prompts_from_message(message, handler_ctx: TelegramHandlerContext) -> None:
     due_items = _enriched_due_items(handler_ctx)
     if not due_items:
-        await message.reply_text("No treatments are due right now.", reply_markup=main_menu_keyboard())
+        await message.reply_text("No treatments are due right now.")
         return
     limit = formatting.MAX_ROWS
     shown = due_items[:limit]

@@ -331,7 +331,8 @@ def test_reply_keyboard_due_today_empty_state():
     message = FakeMessage("Due today")
     update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
     run(handle_text_message(update, None, ctx))
-    assert message.replies[0][0] == "No treatments are due right now."
+    assert message.replies == [("No treatments are due right now.", None)]
+    assert all(getattr(markup, "remove_keyboard", None) is not True for _text, markup in message.replies)
 
 
 def test_due_callback_empty_state():
@@ -339,8 +340,9 @@ def test_due_callback_empty_state():
     query = FakeQuery("menu:due")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
-    assert query.edits[0][0] == "No treatments are due right now."
+    assert query.edits == [("No treatments are due right now.", None)]
     assert query.message.replies == []
+    assert all(getattr(markup, "remove_keyboard", None) is not True for _text, markup in query.edits)
 
 
 def test_quick_log_button_posts_application():
