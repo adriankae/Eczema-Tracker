@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 import re
 import shlex
+from zoneinfo import ZoneInfo
 
 from telegram.error import BadRequest
 
@@ -95,9 +96,9 @@ def _dispatch_callback(data: str, handler_ctx: TelegramHandlerContext, update) -
     if data.startswith("due:log:"):
         ensure_writes_allowed(config.telegram)
         episode_id = int(data.rsplit(":", 1)[1])
-        label = _due_label_for_episode(handler_ctx, episode_id)
+        label = _due_location_label_for_episode(handler_ctx, episode_id)
         client.post("/applications", json={"episode_id": episode_id})
-        return f"Logged application for {label}.", main_menu_keyboard()
+        return f"Logged application for '{label}'", None
     if data == "menu:subjects":
         return formatting.format_subjects(client.get("/subjects")), subjects_keyboard(allow_writes=config.telegram.allow_writes)
     if data == "subject:create":
@@ -463,7 +464,6 @@ async def _send_due_prompts(update, context, handler_ctx: TelegramHandlerContext
         return
     limit = formatting.MAX_ROWS
     shown = due_items[:limit]
-    await safe_edit_callback_message(query, "Due prompts below.", reply_markup=main_menu_keyboard())
     await _send_due_prompt_messages(message, handler_ctx, shown)
     if len(due_items) > limit:
         await message.reply_text(f"Showing {limit} of {len(due_items)} due items.", reply_markup=main_menu_keyboard())
@@ -476,7 +476,6 @@ async def _send_due_prompts_from_message(message, handler_ctx: TelegramHandlerCo
         return
     limit = formatting.MAX_ROWS
     shown = due_items[:limit]
-    await message.reply_text("Due prompts below.", reply_markup=main_menu_keyboard())
     await _send_due_prompt_messages(message, handler_ctx, shown)
     if len(due_items) > limit:
         await message.reply_text(f"Showing {limit} of {len(due_items)} due items.", reply_markup=main_menu_keyboard())
@@ -496,13 +495,34 @@ async def _send_due_prompt_messages(message, handler_ctx: TelegramHandlerContext
 def _format_due_prompt(item: dict) -> str:
     lines = [
         item.get("telegram_label") or f"Episode {item.get('episode_id')}",
-        f"Subject: {item.get('telegram_subject_name') or item.get('subject_id')}",
-        f"Phase: {item.get('current_phase_number')}",
     ]
+    if item.get("telegram_include_subject"):
+        lines.append(f"Subject: {item.get('telegram_subject_name') or item.get('subject_id')}")
+    lines.append(f"Phase: {item.get('current_phase_number')}")
+    next_phase_change = _format_due_next_phase_change(item.get("telegram_phase_due_end_at"), ZoneInfo(item.get("telegram_timezone") or "UTC"))
+    if next_phase_change is not None:
+        lines.append(f"Next phase change: {next_phase_change}")
     status = item.get("status")
     if status:
         lines.append(f"Status: {status}")
     return "\n".join(lines)
+
+
+def _format_due_next_phase_change(value, tzinfo: ZoneInfo) -> str | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return f"{parsed.astimezone(tzinfo):%d.%m.}"
 
 
 def _format_subject_delete_error(exc: CzmError) -> str:
@@ -512,11 +532,11 @@ def _format_subject_delete_error(exc: CzmError) -> str:
     return formatting.backend_error_message(exc.message)
 
 
-def _due_label_for_episode(handler_ctx: TelegramHandlerContext, episode_id: int) -> str:
+def _due_location_label_for_episode(handler_ctx: TelegramHandlerContext, episode_id: int) -> str:
     try:
         for item in _enriched_due_items(handler_ctx):
             if int(item.get("episode_id")) == episode_id:
-                return item.get("telegram_label") or f"episode {episode_id}"
+                return item.get("telegram_location_name") or item.get("telegram_label") or f"episode {episode_id}"
     except Exception:
         pass
     return f"episode {episode_id}"
@@ -534,8 +554,12 @@ def _enriched_due_items(handler_ctx: TelegramHandlerContext) -> list[dict]:
     due_items = handler_ctx.command_context.client.get("/episodes/due").get("due", [])
     subjects = handler_ctx.command_context.client.get("/subjects").get("subjects", [])
     locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
+    episodes = handler_ctx.command_context.client.get("/episodes").get("episodes", [])
     subject_names = {item.get("id"): item.get("display_name") for item in subjects}
     location_names = {item.get("id"): item.get("display_name") for item in locations}
+    episodes_by_id = {item.get("id"): item for item in episodes}
+    include_subject = len(subjects) > 1
+    timezone_name = handler_ctx.command_context.config.timezone
     location_counts: dict[int, int] = {}
     for item in due_items:
         location_id = item.get("location_id")
@@ -551,6 +575,7 @@ def _enriched_due_items(handler_ctx: TelegramHandlerContext) -> list[dict]:
     enriched = []
     for item, base_label in zip(due_items, base_labels, strict=False):
         copied = dict(item)
+        episode = episodes_by_id.get(item.get("episode_id"), {})
         if base_counts.get(base_label, 0) > 1:
             label = f"{base_label} · phase {item.get('current_phase_number')} · #{item.get('episode_id')}"
         else:
@@ -558,6 +583,9 @@ def _enriched_due_items(handler_ctx: TelegramHandlerContext) -> list[dict]:
         copied["telegram_label"] = label
         copied["telegram_location_name"] = location_names.get(item.get("location_id")) or f"Location {item.get('location_id')}"
         copied["telegram_subject_name"] = subject_names.get(item.get("subject_id")) or f"Subject {item.get('subject_id')}"
+        copied["telegram_include_subject"] = include_subject
+        copied["telegram_phase_due_end_at"] = item.get("phase_due_end_at") or episode.get("phase_due_end_at")
+        copied["telegram_timezone"] = timezone_name
         enriched.append(copied)
     return enriched
 

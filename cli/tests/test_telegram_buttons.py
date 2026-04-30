@@ -23,6 +23,8 @@ class FakeClient:
         delete_error: CzmError | None = None,
         due_items: list[dict] | None = None,
         locations: list[dict] | None = None,
+        subjects: list[dict] | None = None,
+        episodes: list[dict] | None = None,
     ):
         self.requests = []
         self.allow_empty = allow_empty
@@ -31,8 +33,20 @@ class FakeClient:
         self.logged = False
         self.delete_error = delete_error
         self.due_items = due_items
-        self.subjects = [{"id": 1, "display_name": "Child A"}]
+        self.subjects = subjects or [{"id": 1, "display_name": "Child A"}]
         self.locations = locations or [{"id": 2, "code": "left_elbow", "display_name": "Left elbow"}]
+        self.episodes = episodes or [
+            {
+                "id": 12,
+                "subject_id": 1,
+                "location_id": 2,
+                "status": "active_flare",
+                "current_phase_number": 1,
+                "phase_due_end_at": "2026-05-03T00:00:00Z",
+                "healed_at": None,
+                "obsolete_at": None,
+            }
+        ]
 
     def get(self, path, params=None):
         self.requests.append(("GET", path, params))
@@ -46,6 +60,8 @@ class FakeClient:
             return {"subjects": self.subjects}
         if path == "/locations":
             return {"locations": self.locations}
+        if path == "/episodes":
+            return {"episodes": self.episodes}
         if path == "/adherence/summary":
             return {"from": "2026-04-01", "to": "2026-04-30", "expected_applications": 10, "credited_applications": 8, "adherence_score": 0.8, "missed_days": 2}
         if path == "/adherence/calendar":
@@ -109,8 +125,10 @@ class FakeQuery:
         self.data = data
         self.edits = []
         self.message = FakeMessage()
+        self.answered = False
 
     async def answer(self):
+        self.answered = True
         return None
 
     async def edit_message_text(self, text, **kwargs):
@@ -137,6 +155,8 @@ def make_handler(
     delete_error=None,
     due_items=None,
     locations=None,
+    subjects=None,
+    episodes=None,
     chat_type=None,
 ):
     config = AppConfig(timezone="UTC", telegram=TelegramConfig(bot_token="t", allowed_chat_ids=[123], allow_writes=allow_writes))
@@ -147,6 +167,8 @@ def make_handler(
         delete_error=delete_error,
         due_items=due_items,
         locations=locations,
+        subjects=subjects,
+        episodes=episodes,
     )
     ctx = TelegramHandlerContext(TelegramCommandContext(config, client), ConversationStore())
     update = Obj(effective_chat=Obj(id=chat_id, type=chat_type), effective_user=Obj(id=user_id))
@@ -184,10 +206,11 @@ def test_due_callback_includes_log_buttons_when_writes_enabled():
     query = FakeQuery("menu:due")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
-    assert query.edits[0][0] == "Due prompts below."
+    assert all(edit[0] != "Due prompts below." for edit in query.edits)
     assert "Left elbow" in query.message.replies[0][0]
-    assert "Subject: Child A" in query.message.replies[0][0]
+    assert "Subject:" not in query.message.replies[0][0]
     assert "Phase: 1" in query.message.replies[0][0]
+    assert "Next phase change: 03.05." in query.message.replies[0][0]
     assert query.message.replies[0][2] == b"image-bytes"
     labels = [button.text for row in query.message.replies[0][1].inline_keyboard for button in row]
     assert labels == ["Log application", "Open menu"]
@@ -212,6 +235,26 @@ def test_due_callback_falls_back_to_text_when_image_missing():
     assert len(query.message.replies[0]) == 2
 
 
+def test_due_callback_includes_subject_when_multiple_subjects():
+    ctx, _client, update = make_handler(
+        allow_writes=True,
+        image=None,
+        subjects=[{"id": 1, "display_name": "Child A"}, {"id": 2, "display_name": "Child B"}],
+    )
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Subject: Child A" in query.message.replies[0][0]
+
+
+def test_due_callback_omits_next_phase_change_when_unavailable():
+    ctx, _client, update = make_handler(allow_writes=True, image=None, episodes=[{"id": 12, "phase_due_end_at": None}])
+    query = FakeQuery("menu:due")
+    update.callback_query = query
+    run(handle_callback(update, None, ctx))
+    assert "Next phase change:" not in query.message.replies[0][0]
+
+
 def test_due_callback_renders_all_backend_due_items_location_first():
     due_items = [
         {"episode_id": 1, "subject_id": 1, "location_id": 1, "current_phase_number": 1, "treatment_due_today": True, "due_slot": "evening"},
@@ -228,7 +271,7 @@ def test_due_callback_renders_all_backend_due_items_location_first():
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     captions = [reply[0] for reply in query.message.replies]
-    assert query.edits[0][0] == "Due prompts below."
+    assert all(edit[0] != "Due prompts below." for edit in query.edits)
     assert len(captions) == 3
     assert any("Hinterkopf links" in caption for caption in captions)
     assert any("Kotelette rechts" in caption for caption in captions)
@@ -241,7 +284,7 @@ def test_log_treatment_uses_location_first_due_prompts():
     query = FakeQuery("menu:log_treatment")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
-    assert query.edits[0][0] == "Due prompts below."
+    assert all(edit[0] != "Due prompts below." for edit in query.edits)
     assert "Left elbow" in query.message.replies[0][0]
     assert "Episode 12" not in query.message.replies[0][0]
 
@@ -251,22 +294,24 @@ def test_reply_keyboard_due_today_uses_location_first_due_prompts():
     message = FakeMessage("Due today")
     update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
     run(handle_text_message(update, None, ctx))
-    assert message.replies[0][0] == "Due prompts below."
-    assert "Left elbow" in message.replies[1][0]
-    assert "Subject: Child A" in message.replies[1][0]
-    assert "Episode 12" not in message.replies[1][0]
-    assert message.replies[1][2] == b"image-bytes"
+    assert all(reply[0] != "Due prompts below." for reply in message.replies)
+    assert "Left elbow" in message.replies[0][0]
+    assert "Subject:" not in message.replies[0][0]
+    assert "Episode 12" not in message.replies[0][0]
+    assert message.replies[0][2] == b"image-bytes"
     assert ("DOWNLOAD", "/locations/2/image", None) in client.requests
 
 
-def test_reply_keyboard_due_now_uses_location_first_due_prompts():
+def test_reply_keyboard_due_now_sends_due_prompts_without_preamble():
     ctx, client, _update = make_handler(allow_writes=True)
     message = FakeMessage("Due now")
     update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
     run(handle_text_message(update, None, ctx))
-    assert message.replies[0][0] == "Due prompts below."
-    assert "Left elbow" in message.replies[1][0]
-    assert "Episode 12" not in message.replies[1][0]
+    assert all(reply[0] != "Due prompts below." for reply in message.replies)
+    assert len(message.replies) == 1
+    assert "Left elbow" in message.replies[0][0]
+    assert "Episode 12" not in message.replies[0][0]
+    assert all(getattr(markup, "remove_keyboard", None) is not True for _text, markup, *_rest in message.replies)
     assert ("DOWNLOAD", "/locations/2/image", None) in client.requests
 
 
@@ -276,9 +321,9 @@ def test_reply_keyboard_log_treatment_reuses_due_prompts():
     update = Obj(effective_chat=Obj(id=123, type="private"), effective_user=Obj(id=1), effective_message=message)
     run(handle_text_message(update, None, ctx))
     assert message.replies[0][0] == "Log treatment moved to Due now."
-    assert message.replies[1][0] == "Due prompts below."
-    assert "Left elbow" in message.replies[2][0]
-    assert "Episode 12" not in message.replies[2][0]
+    assert all(reply[0] != "Due prompts below." for reply in message.replies)
+    assert "Left elbow" in message.replies[1][0]
+    assert "Episode 12" not in message.replies[1][0]
 
 
 def test_reply_keyboard_due_today_empty_state():
@@ -303,8 +348,11 @@ def test_quick_log_button_posts_application():
     query = FakeQuery("due:log:12")
     update.callback_query = query
     run(handle_callback(update, None, ctx))
+    assert query.answered is True
     assert ("POST", "/applications", {"episode_id": 12}) in client.requests
-    assert "Logged application for Left elbow" in query.edits[0][0]
+    assert query.edits == [("Logged application for 'Left elbow'", None)]
+    assert query.message.replies == []
+    assert all(getattr(markup, "remove_keyboard", None) is not True for _text, markup in query.edits)
 
 
 def test_due_today_fetches_fresh_backend_state_after_logging():
@@ -331,7 +379,7 @@ def test_quick_log_button_falls_back_when_due_item_cannot_be_resolved():
     update.callback_query = query
     run(handle_callback(update, None, ctx))
     assert ("POST", "/applications", {"episode_id": 12}) in client.requests
-    assert "Logged application for episode 12" in query.edits[0][0]
+    assert query.edits == [("Logged application for 'episode 12'", None)]
 
 
 def test_write_callback_rejected_when_disabled():

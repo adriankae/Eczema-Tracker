@@ -90,19 +90,26 @@ async def send_due_reminders(bot, handler_ctx, *, reminder_kind: str) -> None:
         return
     subjects = handler_ctx.command_context.client.get("/subjects").get("subjects", [])
     locations = handler_ctx.command_context.client.get("/locations").get("locations", [])
+    episodes = handler_ctx.command_context.client.get("/episodes").get("episodes", [])
     subject_names = {item.get("id"): item.get("display_name") for item in subjects}
     locations_by_id = {item.get("id"): item for item in locations}
+    episodes_by_id = {item.get("id"): item for item in episodes}
+    include_subject = len(subjects) > 1
+    tzinfo = reminder_timezone(config)
     for chat_id in config.telegram.allowed_chat_ids:
         for item in due_items:
             episode_id = int(item["episode_id"])
             if handler_ctx.snoozes is not None and handler_ctx.snoozes.is_snoozed(chat_id, episode_id):
                 continue
             location = locations_by_id.get(item.get("location_id"), {})
+            episode = episodes_by_id.get(episode_id, {})
             text = _reminder_text(
                 item,
-                reminder_kind=reminder_kind,
-                location_name=location.get("display_name") or f"Location {item.get('location_id')}",
+                location_name=_location_label(location, item.get("location_id")),
                 subject_name=subject_names.get(item.get("subject_id")) or f"Subject {item.get('subject_id')}",
+                include_subject=include_subject,
+                phase_due_end_at=item.get("phase_due_end_at") or episode.get("phase_due_end_at"),
+                tzinfo=tzinfo,
             )
             keyboard = reminder_keyboard(episode_id, allow_writes=config.telegram.allow_writes)
             image = _location_image(handler_ctx, item.get("location_id")) if config.telegram.reminders.send_location_images else None
@@ -117,19 +124,59 @@ def _time_with_zone(value: str, label: str, tzinfo: ZoneInfo) -> time:
     return parsed.replace(tzinfo=tzinfo)
 
 
-def _reminder_text(item: dict, *, reminder_kind: str, location_name: str, subject_name: str) -> str:
-    greeting = "Good morning." if reminder_kind == "morning" else "Good evening."
+def _location_label(location: dict, location_id: int | None) -> str:
+    return location.get("display_name") or location.get("code") or f"Location {location_id}"
+
+
+def _reminder_header(item: dict) -> str:
     phase = item.get("current_phase_number")
-    return "\n".join(
-        [
-            f"{greeting} This location needs cream:",
-            "",
-            location_name,
-            f"Subject: {subject_name}",
-            f"Episode: {item.get('episode_id')}",
-            f"Phase: {phase}",
-        ]
-    )
+    due_slot = item.get("due_slot")
+    if phase == 1 and due_slot == "morning":
+        return "Apply this morning:"
+    if phase == 1 and due_slot == "evening":
+        return "Apply this evening:"
+    return "Apply today:"
+
+
+def _format_next_phase_change(value: Any, tzinfo: ZoneInfo) -> str | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone(tzinfo)
+    return f"{local:%d.%m.}"
+
+
+def _reminder_text(
+    item: dict,
+    *,
+    location_name: str,
+    subject_name: str,
+    include_subject: bool,
+    phase_due_end_at: Any = None,
+    tzinfo: ZoneInfo,
+) -> str:
+    lines = [
+        _reminder_header(item),
+        "",
+        f"Location: {location_name}",
+    ]
+    if include_subject:
+        lines.append(f"Subject: {subject_name}")
+    lines.append(f"Phase: {item.get('current_phase_number')}")
+    next_phase_change = _format_next_phase_change(phase_due_end_at, tzinfo)
+    if next_phase_change is not None:
+        lines.append(f"Next phase change: {next_phase_change}")
+    return "\n".join(lines)
 
 
 def _location_image(handler_ctx, location_id) -> tuple[bytes, str | None] | None:
